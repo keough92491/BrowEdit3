@@ -228,6 +228,10 @@ public:
 	int gatStraightType = 0;
 	int gatType = -1;
 
+	// tiles this model blocked through Auto-GAT, so they can follow the model when it moves and be given back when it is deleted
+	struct AutoGatTile { int x = 0, y = 0, orig = 0, set = 0; };
+	std::vector<AutoGatTile> autoGatTiles;
+
 	RswModel() : aabb(glm::vec3(), glm::vec3()) {}
 	RswModel(const std::string &fileName) : aabb(glm::vec3(), glm::vec3()), animType(0), animSpeed(1), blockType(0), fileName(fileName) {}
 	RswModel(RswModel* other);

@@ -194,6 +194,7 @@
     <ClInclude Include="browedit\actions\CubeTileChangeAction.h" />
     <ClInclude Include="browedit\actions\DeleteObjectAction.h" />
     <ClInclude Include="browedit\actions\GatTileChangeAction.h" />
+    <ClInclude Include="browedit\actions\AutoGatFootprintAction.h" />
     <ClInclude Include="browedit\actions\GndTextureActions.h" />
     <ClInclude Include="browedit\actions\GndVersionChangeAction.h" />
     <ClInclude Include="browedit\actions\GroupAction.h" />

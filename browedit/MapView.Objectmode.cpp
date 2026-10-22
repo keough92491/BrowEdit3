@@ -203,7 +203,7 @@ void MapView::postRenderObjectMode(BrowEdit* browEdit)
 				std::vector<Node*> placedNodes;
 				for (auto& newNode : browEdit->newNodes)
 					placedNodes.push_back(newNode.first);
-				map->addAutoGatActions(placedNodes, browEdit->autoGatBandHeight, browEdit->autoGatType, ga);
+				map->addAutoGatActions(placedNodes, browEdit->autoGatBandHeight, browEdit->autoGatType, ga, false, true);
 			}
 
 			map->doAction(ga, browEdit);
@@ -383,6 +383,11 @@ void MapView::postRenderObjectMode(BrowEdit* browEdit)
 							ga->addAction(new ObjectChangeAction(n, &rswObject->position, originalValues[n].pos, ""));
 						}
 					}
+					std::vector<Node*> movedNodes;
+					for (auto n : map->selectedNodes)
+						if (n->getComponent<RswObject>())
+							movedNodes.push_back(n);
+					map->autoGatFollow(movedNodes, browEdit, ga);
 					map->doAction(ga, browEdit);
 				}
 
@@ -799,7 +804,12 @@ void MapView::postRenderObjectMode(BrowEdit* browEdit)
 			if (justPressed && map->selectedNodes.size() > 0 && map->selectedNodes[0]->getComponent<RswObject>())
 			{
 				if(map->selectedNodes[0]->getComponent<RswObject>()->position != originalPosition)
-					map->doAction(new ObjectChangeAction(map->selectedNodes[0], &map->selectedNodes[0]->getComponent<RswObject>()->position, originalPosition, "Moved"), browEdit);
+				{
+					auto moveGa = new GroupAction();
+					moveGa->addAction(new ObjectChangeAction(map->selectedNodes[0], &map->selectedNodes[0]->getComponent<RswObject>()->position, originalPosition, "Moved"));
+					map->autoGatFollow({ map->selectedNodes[0] }, browEdit, moveGa);
+					map->doAction(moveGa, browEdit);
+				}
 				justPressed = false;
 			}
 			else if (objectSelectLasso.size() > 5)

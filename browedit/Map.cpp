@@ -35,6 +35,9 @@ using json = nlohmann::json;
 #include <cmath>
 #include <limits>
 #include <unordered_map>
+#include <map>
+#include <set>
+#include <browedit/actions/AutoGatFootprintAction.h>
 #include <iostream>
 #include <thread>
 #include <mutex>
@@ -206,6 +209,7 @@ void Map::invertScale(int axis, BrowEdit* browEdit)
 		if (rsmRenderer)
 			rsmRenderer->setDirty();
 	}
+	autoGatFollow(selectedNodes, browEdit, ga);
 	doAction(ga, browEdit);
 }
 void Map::nudgeSelection(int axis, int sign, BrowEdit* browEdit)
@@ -225,6 +229,7 @@ void Map::nudgeSelection(int axis, int sign, BrowEdit* browEdit)
 		if (rsmRenderer)
 			rsmRenderer->setDirty();
 	}
+	autoGatFollow(selectedNodes, browEdit, ga);
 	doAction(ga, browEdit);
 }
 
@@ -258,6 +263,7 @@ void Map::rotateSelection(int axis, int sign, BrowEdit* browEdit)
 		if (rsmRenderer)
 			rsmRenderer->setDirty();
 	}
+	autoGatFollow(selectedNodes, browEdit, ga);
 	doAction(ga, browEdit);
 
 }
@@ -280,6 +286,7 @@ void Map::randomRotateSelection(int axis, BrowEdit* browEdit)
 		if (rsmRenderer)
 			rsmRenderer->setDirty();
 	}
+	autoGatFollow(selectedNodes, browEdit, ga);
 	doAction(ga, browEdit);
 
 }
@@ -301,6 +308,7 @@ void Map::flipSelection(int axis, BrowEdit* browEdit)
 		if (rsmRenderer)
 			rsmRenderer->setDirty();
 	}
+	autoGatFollow(selectedNodes, browEdit, ga);
 	doAction(ga, browEdit);
 }
 
@@ -326,6 +334,7 @@ void Map::setSelectedItemsToFloorHeight(BrowEdit* browEdit)
 			}
 		}
 	}
+	autoGatFollow(selectedNodes, browEdit, ga);
 	doAction(ga, browEdit);
 
 }
@@ -425,6 +434,7 @@ void Map::deleteSelection(BrowEdit* browEdit)
 		auto ga = new GroupAction();
 		for (auto n : selectedNodes)
 			ga->addAction(new DeleteObjectAction(n));
+		autoGatFollow(selectedNodes, browEdit, ga, true);
 		doAction(ga, browEdit);
 	}
 }
@@ -557,15 +567,55 @@ namespace
 	}
 }
 
-void Map::addAutoGatActions(const std::vector<Node*>& nodes, float bandHeight, int defaultGatType, GroupAction* ga)
+namespace
+{
+	// same matrix the renderer builds for a model, so it can be used before the renderer has had a chance to refresh its cache
+	glm::mat4 autoGatModelMatrix(Gnd* gnd, RswObject* rswObject, Rsm* rsm)
+	{
+		glm::mat4 m(1.0f);
+		m = glm::scale(m, glm::vec3(1, 1, -1));
+		m = glm::translate(m, glm::vec3(5 * gnd->width + rswObject->position.x, -rswObject->position.y, -10 - 5 * gnd->height + rswObject->position.z));
+		m = glm::rotate(m, -glm::radians(rswObject->rotation.z), glm::vec3(0, 0, 1));
+		m = glm::rotate(m, -glm::radians(rswObject->rotation.x), glm::vec3(1, 0, 0));
+		m = glm::rotate(m, glm::radians(rswObject->rotation.y), glm::vec3(0, 1, 0));
+		m = glm::scale(m, glm::vec3(rswObject->scale.x, -rswObject->scale.y, rswObject->scale.z));
+		if (rsm->version < 0x0202)
+			m = glm::translate(m, glm::vec3(-rsm->realbbrange.x, rsm->realbbmin.y, -rsm->realbbrange.z));
+		else
+			m = glm::scale(m, glm::vec3(1, -1, 1));
+		return m;
+	}
+}
+
+// Keeps the GAT in sync with the models: every model remembers which tiles it blocked (and what they were before),
+// so moving, rotating, scaling or deleting a model frees its old tiles and blocks the new ones. Tiles that were edited
+// by hand since, or that another model also blocks, are left alone.
+void Map::addAutoGatActions(const std::vector<Node*>& nodes, float bandHeight, int defaultGatType, GroupAction* ga, bool removed, bool useMatrixCache)
 {
 	auto gnd = rootNode->getComponent<Gnd>();
 	auto gat = rootNode->getComponent<Gat>();
 	if (!gnd || !gat || !ga)
 		return;
 
-	// tiles that already got an action in this batch, so overlapping models don't produce duplicates
-	std::set<std::pair<int, int>> handledTiles;
+	typedef std::pair<int, int> TileKey;
+
+	// who currently owns which tile (all models in the map)
+	std::map<TileKey, std::map<RswModel*, RswModel::AutoGatTile>> owners;
+	rootNode->traverse([&](Node* n)
+	{
+		auto m = n->getComponent<RswModel>();
+		if (m)
+			for (const auto& t : m->autoGatTiles)
+				owners[{t.x, t.y}][m] = t;
+	});
+
+	// gat values as they will be once the actions are performed
+	std::map<TileKey, int> virtualValue;
+	auto valueOf = [&](const TileKey& k) -> int
+	{
+		auto it = virtualValue.find(k);
+		return it != virtualValue.end() ? it->second : gat->cubes[k.first][k.second]->gatType;
+	};
 
 	// terrain height below a world position, cached because most vertices are shared between faces
 	std::unordered_map<long long, float> terrainCache;
@@ -600,62 +650,128 @@ void Map::addAutoGatActions(const std::vector<Node*>& nodes, float bandHeight, i
 		node->traverse([&](Node* n)
 		{
 			auto rswModel = n->getComponent<RswModel>();
+			auto rswObject = n->getComponent<RswObject>();
 			auto rsm = n->getComponent<Rsm>();
 			auto rsmRenderer = n->getComponent<RsmRenderer>();
-			if (!rswModel || !rsm || !rsmRenderer || !rsm->loaded || rsm->rootMesh == nullptr)
+			if (!rswModel || !rswObject || !rsm || !rsmRenderer || !rsm->loaded || rsm->rootMesh == nullptr)
 				return;
 
-			// the matrix of a model that was just placed comes from the placement preview
-			std::vector<std::array<glm::vec3, 3>> triangles;
-			collectWorldTriangles(rsm->rootMesh, rsmRenderer, rsmRenderer->matrixCache, triangles);
-
 			int gatType = rswModel->gatType > -1 ? rswModel->gatType : defaultGatType;
-			const float margin = 0.05f; // so a model that is exactly aligned to the grid doesn't spill into its neighbours
 
-			for (const auto& tri : triangles)
+			// footprint of the model: all tiles its ground contact area overlaps
+			std::set<TileKey> footprint;
+			if (!removed)
 			{
-				// only faces that touch the ground: at least one corner close to (or below) the terrain under it
-				bool touchesGround = false;
-				for (int i = 0; i < 3 && !touchesGround; i++)
+				std::vector<std::array<glm::vec3, 3>> triangles;
+				glm::mat4 matrix = useMatrixCache ? rsmRenderer->matrixCache : autoGatModelMatrix(gnd, rswObject, rsm);
+				collectWorldTriangles(rsm->rootMesh, rsmRenderer, matrix, triangles);
+
+				const float margin = 0.05f; // so a model that is exactly aligned to the grid doesn't spill into its neighbours
+				for (const auto& tri : triangles)
 				{
-					float ground = terrainHeightAt(tri[i]);
-					if (!std::isnan(ground) && tri[i].y <= ground + bandHeight)
-						touchesGround = true;
-				}
-				if (!touchesGround)
-					continue;
-
-				// project onto the ground plane and mark every GAT tile it overlaps
-				glm::vec2 flat[3] = { glm::vec2(tri[0].x, tri[0].z), glm::vec2(tri[1].x, tri[1].z), glm::vec2(tri[2].x, tri[2].z) };
-				glm::vec2 lo = glm::min(flat[0], glm::min(flat[1], flat[2]));
-				glm::vec2 hi = glm::max(flat[0], glm::max(flat[1], flat[2]));
-
-				int tileXMin = (int)glm::floor(lo.x / 5.0f);
-				int tileXMax = (int)glm::floor(hi.x / 5.0f);
-				int tileYMin = gat->height - (int)glm::floor(hi.y / 5.0f) + 1;
-				int tileYMax = gat->height - (int)glm::floor(lo.y / 5.0f) + 1;
-
-				for (int tx = glm::max(tileXMin, 0); tx <= glm::min(tileXMax, gat->width - 1); tx++)
-				{
-					for (int ty = glm::max(tileYMin, 0); ty <= glm::min(tileYMax, gat->height - 1); ty++)
+					// only faces that touch the ground: at least one corner close to (or below) the terrain under it
+					bool touchesGround = false;
+					for (int i = 0; i < 3 && !touchesGround; i++)
 					{
-						if (handledTiles.count({ tx, ty }) > 0)
-							continue;
+						float ground = terrainHeightAt(tri[i]);
+						if (!std::isnan(ground) && tri[i].y <= ground + bandHeight)
+							touchesGround = true;
+					}
+					if (!touchesGround)
+						continue;
 
-						// tile bounds in world space, matching Gat::getPos
-						glm::vec2 rMin(5.0f * tx + margin, 5.0f * gat->height - 5.0f * ty + 5.0f + margin);
-						glm::vec2 rMax(5.0f * tx + 5.0f - margin, 5.0f * gat->height - 5.0f * ty + 10.0f - margin);
-						if (!triangleOverlapsRect(flat, rMin, rMax))
-							continue;
+					// project onto the ground plane and collect every GAT tile it overlaps
+					glm::vec2 flat[3] = { glm::vec2(tri[0].x, tri[0].z), glm::vec2(tri[1].x, tri[1].z), glm::vec2(tri[2].x, tri[2].z) };
+					glm::vec2 lo = glm::min(flat[0], glm::min(flat[1], flat[2]));
+					glm::vec2 hi = glm::max(flat[0], glm::max(flat[1], flat[2]));
 
-						handledTiles.insert({ tx, ty });
-						if (gat->cubes[tx][ty]->gatType != gatType)
-							ga->addAction(new GatTileChangeAction(glm::ivec2(tx, ty), gat->cubes[tx][ty], gatType));
+					int tileXMin = (int)glm::floor(lo.x / 5.0f);
+					int tileXMax = (int)glm::floor(hi.x / 5.0f);
+					int tileYMin = gat->height - (int)glm::floor(hi.y / 5.0f) + 1;
+					int tileYMax = gat->height - (int)glm::floor(lo.y / 5.0f) + 1;
+
+					for (int tx = glm::max(tileXMin, 0); tx <= glm::min(tileXMax, gat->width - 1); tx++)
+					{
+						for (int ty = glm::max(tileYMin, 0); ty <= glm::min(tileYMax, gat->height - 1); ty++)
+						{
+							if (footprint.count({ tx, ty }) > 0)
+								continue;
+
+							// tile bounds in world space, matching Gat::getPos
+							glm::vec2 rMin(5.0f * tx + margin, 5.0f * gat->height - 5.0f * ty + 5.0f + margin);
+							glm::vec2 rMax(5.0f * tx + 5.0f - margin, 5.0f * gat->height - 5.0f * ty + 10.0f - margin);
+							if (triangleOverlapsRect(flat, rMin, rMax))
+								footprint.insert({ tx, ty });
+						}
 					}
 				}
 			}
+
+			std::vector<RswModel::AutoGatTile> result;
+
+			// tiles the model used to block but doesn't anymore
+			for (const auto& old : rswModel->autoGatTiles)
+			{
+				TileKey k(old.x, old.y);
+				if (footprint.count(k) > 0)
+					continue;
+				auto& tileOwners = owners[k];
+				tileOwners.erase(rswModel);
+				// give the tile back, unless somebody else still blocks it or it was changed by hand in the meantime
+				if (tileOwners.empty() && valueOf(k) == old.set)
+					virtualValue[k] = old.orig;
+			}
+
+			// tiles the model blocks now
+			for (const auto& k : footprint)
+			{
+				auto& tileOwners = owners[k];
+				auto existing = tileOwners.find(rswModel);
+				if (existing != tileOwners.end())
+				{
+					// already blocked by this model; follow a changed type
+					if (existing->second.set != gatType && valueOf(k) == existing->second.set)
+					{
+						virtualValue[k] = gatType;
+						existing->second.set = gatType;
+					}
+					result.push_back(existing->second);
+					continue;
+				}
+
+				RswModel::AutoGatTile t;
+				t.x = k.first;
+				t.y = k.second;
+				// when another model already blocks the tile, the value from before any model is what we have to give back
+				t.orig = tileOwners.empty() ? valueOf(k) : tileOwners.begin()->second.orig;
+				t.set = gatType;
+				if (valueOf(k) != gatType)
+					virtualValue[k] = gatType;
+				tileOwners[rswModel] = t;
+				result.push_back(t);
+			}
+
+			bool changed = result.size() != rswModel->autoGatTiles.size();
+			for (size_t i = 0; !changed && i < result.size(); i++)
+			{
+				const auto& a = result[i];
+				const auto& b = rswModel->autoGatTiles[i];
+				changed = a.x != b.x || a.y != b.y || a.orig != b.orig || a.set != b.set;
+			}
+			if (changed)
+				ga->addAction(new AutoGatFootprintAction(rswModel, result));
 		});
 	}
+
+	for (const auto& v : virtualValue)
+		if (gat->cubes[v.first.first][v.first.second]->gatType != v.second)
+			ga->addAction(new GatTileChangeAction(glm::ivec2(v.first.first, v.first.second), gat->cubes[v.first.first][v.first.second], v.second));
+}
+
+void Map::autoGatFollow(const std::vector<Node*>& nodes, BrowEdit* browEdit, GroupAction* ga, bool removed)
+{
+	if (browEdit->autoGatOnPlace)
+		addAutoGatActions(nodes, browEdit->autoGatBandHeight, browEdit->autoGatType, ga, removed, false);
 }
 
 

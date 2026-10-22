@@ -66,9 +66,9 @@ void BrowEdit::showObjectEditToolsWindow()
 	hotkeyButton("Randomize Z rotation", HotkeyAction::ObjectEdit_RandomZRotation);
 
 	ImGui::Separator();
-	ImGui::Checkbox("Auto-GAT on placement", &autoGatOnPlace);
+	ImGui::Checkbox("Smart model GAT", &autoGatOnPlace);
 	if (ImGui::IsItemHovered())
-		ImGui::SetTooltip("When placing models, mark the GAT tiles under the part of the model\nthat touches the ground as not walkable.\nUndo removes the model and restores the tiles in one step.");
+		ImGui::SetTooltip("Placing a model marks the GAT tiles under its ground contact area as not walkable.\nMoving, rotating, scaling or nudging it moves those tiles along, deleting it gives them back.\nTiles you edited by hand are left alone. Every step is one undo.\nOnly models placed with this ticked are followed.");
 	if (autoGatOnPlace)
 	{
 		ImGui::DragFloat("Ground contact height", &autoGatBandHeight, 0.1f, 0.0f, 100.0f);
