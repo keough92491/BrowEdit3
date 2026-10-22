@@ -74,6 +74,15 @@ void BrowEdit::showObjectEditToolsWindow()
 		ImGui::DragFloat("Ground contact height", &autoGatBandHeight, 0.1f, 0.0f, 100.0f);
 		if (ImGui::IsItemHovered())
 			ImGui::SetTooltip("Model surfaces within this height above the terrain count as touching the ground.\nLower = only the base of the model, higher = also block things hanging slightly above ground.");
+		ImGui::Checkbox("Fill inside", &autoGatFillInterior);
+		if (ImGui::IsItemHovered())
+			ImGui::SetTooltip("Also block the area enclosed by the model, like the floor inside a house.");
+		if (autoGatFillInterior)
+		{
+			ImGui::DragInt("Doorway gap to close", &autoGatCloseGap, 0.1f, 0, 3);
+			if (ImGui::IsItemHovered())
+				ImGui::SetTooltip("Openings up to this many tiles on each side of a doorway still count as closed,\nso the inside gets filled even when the house has a door. 0 = only fully closed walls.");
+		}
 		ImGui::DragInt("GAT type", &autoGatType, 0.1f, 0, 15);
 		if (ImGui::IsItemHovered())
 			ImGui::SetTooltip("GAT type to apply (1 = not walkable).\nModels with 'Force gat tiles on model' set use that value instead.");

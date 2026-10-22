@@ -73,7 +73,7 @@ public:
 	// Auto-GAT: finds the GAT tiles under the part of each model (in the given nodes and their children) that touches
 	// the ground, and adds actions to 'ga' that set those tiles to the model's gat type (or defaultGatType when the model
 	// has none). Nothing is changed until 'ga' is performed, so undoing 'ga' restores the tiles.
-	void addAutoGatActions(const std::vector<Node*>& nodes, float bandHeight, int defaultGatType, GroupAction* ga, bool removed = false, bool useMatrixCache = false);
+	void addAutoGatActions(const std::vector<Node*>& nodes, float bandHeight, int defaultGatType, GroupAction* ga, bool removed = false, bool useMatrixCache = false, bool fillInterior = true, int closeGap = 1);
 	void autoGatFollow(const std::vector<Node*>& nodes, BrowEdit* browEdit, GroupAction* ga, bool removed = false);
 
 	void exportShadowMap(BrowEdit* browEdit, bool exportWalls, bool exportBorders);

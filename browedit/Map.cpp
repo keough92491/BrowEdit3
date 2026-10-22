@@ -590,7 +590,7 @@ namespace
 // Keeps the GAT in sync with the models: every model remembers which tiles it blocked (and what they were before),
 // so moving, rotating, scaling or deleting a model frees its old tiles and blocks the new ones. Tiles that were edited
 // by hand since, or that another model also blocks, are left alone.
-void Map::addAutoGatActions(const std::vector<Node*>& nodes, float bandHeight, int defaultGatType, GroupAction* ga, bool removed, bool useMatrixCache)
+void Map::addAutoGatActions(const std::vector<Node*>& nodes, float bandHeight, int defaultGatType, GroupAction* ga, bool removed, bool useMatrixCache, bool fillInterior, int closeGap)
 {
 	auto gnd = rootNode->getComponent<Gnd>();
 	auto gat = rootNode->getComponent<Gat>();
@@ -707,6 +707,76 @@ void Map::addAutoGatActions(const std::vector<Node*>& nodes, float bandHeight, i
 				}
 			}
 
+
+			// fill the area the walls enclose (the inside of a house): close small gaps like doorways, then everything
+			// that can't be reached from outside the model is blocked too (the doorway itself included)
+			if (fillInterior && !footprint.empty())
+			{
+				int r = glm::clamp(closeGap, 0, 3);
+				int pad = r + 1;
+				int minX = footprint.begin()->first, maxX = minX, minY = footprint.begin()->second, maxY = minY;
+				for (const auto& t : footprint)
+				{
+					minX = glm::min(minX, t.first); maxX = glm::max(maxX, t.first);
+					minY = glm::min(minY, t.second); maxY = glm::max(maxY, t.second);
+				}
+				int x0 = minX - pad, y0 = minY - pad;
+				int W = maxX - minX + 1 + 2 * pad, H = maxY - minY + 1 + 2 * pad;
+				std::vector<char> solid((size_t)W * H, 0);
+				for (const auto& t : footprint)
+					solid[(size_t)(t.second - y0) * W + (t.first - x0)] = 1;
+
+				auto morph = [&](const std::vector<char>& in, bool dilate)
+				{
+					std::vector<char> out((size_t)W * H, 0);
+					for (int y = 0; y < H; y++)
+						for (int x = 0; x < W; x++)
+						{
+							bool any = false, all = true;
+							for (int dy = -r; dy <= r; dy++)
+								for (int dx = -r; dx <= r; dx++)
+								{
+									int xx = x + dx, yy = y + dy;
+									bool v = xx >= 0 && yy >= 0 && xx < W && yy < H && in[(size_t)yy * W + xx];
+									any = any || v;
+									all = all && v;
+								}
+							out[(size_t)y * W + x] = dilate ? any : all;
+						}
+					return out;
+				};
+				std::vector<char> closed = r > 0 ? morph(morph(solid, true), false) : solid;
+
+				// flood the outside, starting from the padded border (which is always empty)
+				std::vector<char> outside((size_t)W * H, 0);
+				std::vector<int> stack = { 0 };
+				outside[0] = 1;
+				while (!stack.empty())
+				{
+					int i = stack.back(); stack.pop_back();
+					int x = i % W, y = i / W;
+					const int nx[4] = { x - 1, x + 1, x, x }, ny[4] = { y, y, y - 1, y + 1 };
+					for (int k = 0; k < 4; k++)
+					{
+						if (nx[k] < 0 || ny[k] < 0 || nx[k] >= W || ny[k] >= H)
+							continue;
+						int j = ny[k] * W + nx[k];
+						if (!outside[j] && !closed[j])
+						{
+							outside[j] = 1;
+							stack.push_back(j);
+						}
+					}
+				}
+				for (int y = 0; y < H; y++)
+					for (int x = 0; x < W; x++)
+					{
+						size_t i = (size_t)y * W + x;
+						if (!solid[i] && !outside[i] && gat->inMap(glm::ivec2(x + x0, y + y0)))
+							footprint.insert({ x + x0, y + y0 });
+					}
+			}
+
 			std::vector<RswModel::AutoGatTile> result;
 
 			// tiles the model used to block but doesn't anymore
@@ -771,7 +841,7 @@ void Map::addAutoGatActions(const std::vector<Node*>& nodes, float bandHeight, i
 void Map::autoGatFollow(const std::vector<Node*>& nodes, BrowEdit* browEdit, GroupAction* ga, bool removed)
 {
 	if (browEdit->autoGatOnPlace)
-		addAutoGatActions(nodes, browEdit->autoGatBandHeight, browEdit->autoGatType, ga, removed, false);
+		addAutoGatActions(nodes, browEdit->autoGatBandHeight, browEdit->autoGatType, ga, removed, false, browEdit->autoGatFillInterior, browEdit->autoGatCloseGap);
 }
 
 

@@ -203,7 +203,7 @@ void MapView::postRenderObjectMode(BrowEdit* browEdit)
 				std::vector<Node*> placedNodes;
 				for (auto& newNode : browEdit->newNodes)
 					placedNodes.push_back(newNode.first);
-				map->addAutoGatActions(placedNodes, browEdit->autoGatBandHeight, browEdit->autoGatType, ga, false, true);
+				map->addAutoGatActions(placedNodes, browEdit->autoGatBandHeight, browEdit->autoGatType, ga, false, true, browEdit->autoGatFillInterior, browEdit->autoGatCloseGap);
 			}
 
 			map->doAction(ga, browEdit);

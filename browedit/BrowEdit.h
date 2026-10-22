@@ -296,6 +296,8 @@ public:
 	// Auto-GAT: when enabled, placing models marks the GAT tiles under their ground contact area
 	bool autoGatOnPlace = false;
 	float autoGatBandHeight = 5.0f;	// how far above the ground a model surface may be and still count as touching it
+	bool autoGatFillInterior = true;	// also block the area enclosed by the model (the inside of a house)
+	int autoGatCloseGap = 1;		// doorways up to 2*this tiles wide don't let the inside count as open
 	int autoGatType = 1;			// GAT type applied (1 = not walkable), a model's own "force gat tiles" value takes priority
 
 	bool statusText = false;
