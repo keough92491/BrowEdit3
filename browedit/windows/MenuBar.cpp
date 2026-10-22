@@ -23,6 +23,9 @@
 #include <GLFW/glfw3.h>
 #include <imgui_internal.h>
 #include <fstream>
+#include <set>
+#include <algorithm>
+#include <json.hpp>
 
 void BrowEdit::menuBar()
 {
@@ -84,6 +87,34 @@ void BrowEdit::menuBar()
 
 			std::ofstream mapDataFile("mapdata.json");
 			mapDataFile << std::setw(2) << mapData;
+		}
+		if (ImGui::MenuItem("Export asset catalog (for Claude)"))
+		{
+			// lists the models and textures available in the client, so a map generator knows what it can use
+			nlohmann::json catalog;
+			catalog["models"] = nlohmann::json::array();
+			catalog["textures"] = nlohmann::json::array();
+			std::set<std::string> models, textures;
+			auto isAscii = [](const std::string& f) { for (unsigned char c : f) if (c > 127) return false; return true; };
+			for (auto f : util::FileIO::listAllFiles())
+			{
+				std::transform(f.begin(), f.end(), f.begin(), ::tolower);
+				std::replace(f.begin(), f.end(), '/', '\\');
+				if (!isAscii(f))
+					continue;
+				if (f.rfind("data\\model\\", 0) == 0 && f.size() > 4 && f.substr(f.size() - 4) == ".rsm")
+					models.insert(f.substr(11));
+				else if (f.rfind("data\\texture\\", 0) == 0 && f.size() > 4)
+				{
+					auto ext = f.substr(f.size() - 4);
+					if (ext == ".bmp" || ext == ".jpg" || ext == ".tga" || ext == ".png")
+						textures.insert(f.substr(13));
+				}
+			}
+			for (const auto& m : models) catalog["models"].push_back(m);
+			for (const auto& t : textures) catalog["textures"].push_back(t);
+			std::ofstream catalogFile("catalog.json");
+			catalogFile << catalog;
 		}
 		hotkeyMenuItem("Open Model Editor", HotkeyAction::Global_ModelEditor_Open);
 		hotkeyMenuItem("Quit", HotkeyAction::Global_Exit);
@@ -283,6 +314,20 @@ void BrowEdit::menuBar()
 			if (activeMapView)
 				activeMapView->map->selectAll<RswLight>(this);
 		}
+
+		if (ImGui::MenuItem("Smart GAT: recalculate all models"))
+		{
+			// blocks the exact ground footprint of every model in the map, using the Smart model GAT settings
+			auto ga = new GroupAction("Smart GAT for all models");
+			std::vector<Node*> models;
+			activeMapView->map->rootNode->traverse([&](Node* n) {
+				if (n->getComponent<RswModel>())
+					models.push_back(n);
+			});
+			activeMapView->map->addAutoGatActions(models, autoGatBandHeight, autoGatType, ga, false, false, autoGatFillInterior, autoGatCloseGap);
+			activeMapView->map->doAction(ga, this);
+		}
+
 
 		ImGui::EndMenu();
 	}
