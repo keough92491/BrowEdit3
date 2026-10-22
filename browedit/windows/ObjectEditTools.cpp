@@ -65,6 +65,20 @@ void BrowEdit::showObjectEditToolsWindow()
 	hotkeyButton("Randomize Y rotation", HotkeyAction::ObjectEdit_RandomYRotation);
 	hotkeyButton("Randomize Z rotation", HotkeyAction::ObjectEdit_RandomZRotation);
 
+	ImGui::Separator();
+	ImGui::Checkbox("Auto-GAT on placement", &autoGatOnPlace);
+	if (ImGui::IsItemHovered())
+		ImGui::SetTooltip("When placing models, mark the GAT tiles under the part of the model\nthat touches the ground as not walkable.\nUndo removes the model and restores the tiles in one step.");
+	if (autoGatOnPlace)
+	{
+		ImGui::DragFloat("Ground contact height", &autoGatBandHeight, 0.1f, 0.0f, 100.0f);
+		if (ImGui::IsItemHovered())
+			ImGui::SetTooltip("Model surfaces within this height above the terrain count as touching the ground.\nLower = only the base of the model, higher = also block things hanging slightly above ground.");
+		ImGui::DragInt("GAT type", &autoGatType, 0.1f, 0, 15);
+		if (ImGui::IsItemHovered())
+			ImGui::SetTooltip("GAT type to apply (1 = not walkable).\nModels with 'Force gat tiles on model' set use that value instead.");
+	}
+
 
 	ImGui::End();
 }

@@ -6,6 +6,10 @@ on:
   pull_request:
     branches: [ master ]
 
+# The Release step needs this, forks don't get write access for the token by default
+permissions:
+  contents: write
+
 env:
   # Path to the solution file relative to the root of the project.
   SOLUTION_FILE_PATH: .

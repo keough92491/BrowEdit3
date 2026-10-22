@@ -292,6 +292,12 @@ public:
 	float nudgeDistance = 1.0f;
 	float rotateDistance = 45.0f;
 	bool useGridForNudge = true;
+
+	// Auto-GAT: when enabled, placing models marks the GAT tiles under their ground contact area
+	bool autoGatOnPlace = false;
+	float autoGatBandHeight = 5.0f;	// how far above the ground a model surface may be and still count as touching it
+	int autoGatType = 1;			// GAT type applied (1 = not walkable), a model's own "force gat tiles" value takes priority
+
 	bool statusText = false;
 	ImGuiID dockspaceId = 0;
 

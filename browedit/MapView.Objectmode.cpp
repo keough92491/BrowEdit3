@@ -196,6 +196,16 @@ void MapView::postRenderObjectMode(BrowEdit* browEdit)
 				ga->addAction(sa);
 				first = true;
 			}
+
+			// Auto-GAT: block the tiles under the ground contact area of the new models, in the same undo step
+			if (browEdit->autoGatOnPlace)
+			{
+				std::vector<Node*> placedNodes;
+				for (auto& newNode : browEdit->newNodes)
+					placedNodes.push_back(newNode.first);
+				map->addAutoGatActions(placedNodes, browEdit->autoGatBandHeight, browEdit->autoGatType, ga);
+			}
+
 			map->doAction(ga, browEdit);
 			browEdit->newNodes.clear();
 		}

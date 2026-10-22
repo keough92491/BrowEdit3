@@ -11,7 +11,9 @@
 #include <browedit/actions/TileNewAction.h>
 #include <browedit/actions/CubeTileChangeAction.h>
 #include <browedit/actions/TilePropertyChangeAction.h>
+#include <browedit/actions/GatTileChangeAction.h>
 #include <browedit/components/Rsw.h>
+#include <browedit/components/RsmRenderer.h>
 #include <browedit/components/Gnd.h>
 #include <browedit/components/Gat.h>
 #include <browedit/components/LubSkyMap.h>
@@ -29,6 +31,10 @@ using json = nlohmann::json;
 #include <stb/stb_image_write.h>
 #include <stb/stb_image.h>
 #include <set>
+#include <array>
+#include <cmath>
+#include <limits>
+#include <unordered_map>
 #include <iostream>
 #include <thread>
 #include <mutex>
@@ -472,6 +478,184 @@ void Map::pasteSelection(BrowEdit* browEdit)
 	catch (...) {
 		std::cerr << "!!!!!!!!!!! Some sort of error occurred???" << std::endl;
 	};
+}
+
+
+// ---------------------------------------------------------------------------------------------
+// Auto-GAT
+// ---------------------------------------------------------------------------------------------
+namespace
+{
+	// Does the 2D triangle overlap the axis aligned rectangle? Touching does not count.
+	// Separating axis test, which also works for triangles that are squashed into a line (vertical faces).
+	bool triangleOverlapsRect(const glm::vec2* tri, const glm::vec2& rMin, const glm::vec2& rMax)
+	{
+		for (int axis = 0; axis < 2; axis++)
+		{
+			float tMin = glm::min(tri[0][axis], glm::min(tri[1][axis], tri[2][axis]));
+			float tMax = glm::max(tri[0][axis], glm::max(tri[1][axis], tri[2][axis]));
+			if (tMax <= rMin[axis] || tMin >= rMax[axis])
+				return false;
+		}
+
+		const glm::vec2 corners[4] = { rMin, glm::vec2(rMax.x, rMin.y), glm::vec2(rMin.x, rMax.y), rMax };
+		for (int i = 0; i < 3; i++)
+		{
+			glm::vec2 edge = tri[(i + 1) % 3] - tri[i];
+			glm::vec2 normal(-edge.y, edge.x);
+			float len = glm::length(normal);
+			if (len < 1e-6f)
+				continue;
+			normal /= len;
+
+			float tMin = std::numeric_limits<float>::max(), tMax = -std::numeric_limits<float>::max();
+			float cMin = std::numeric_limits<float>::max(), cMax = -std::numeric_limits<float>::max();
+			for (int k = 0; k < 3; k++)
+			{
+				float d = glm::dot(normal, tri[k]);
+				tMin = glm::min(tMin, d);
+				tMax = glm::max(tMax, d);
+			}
+			for (int k = 0; k < 4; k++)
+			{
+				float d = glm::dot(normal, corners[k]);
+				cMin = glm::min(cMin, d);
+				cMax = glm::max(cMax, d);
+			}
+			if (tMax <= cMin || tMin >= cMax)
+				return false;
+		}
+		return true;
+	}
+
+	// Collects the faces of a model in world space, the same way RswModelCollider does, but without touching its BVH
+	void collectWorldTriangles(Rsm::Mesh* mesh, RsmRenderer* renderer, const glm::mat4& matrix, std::vector<std::array<glm::vec3, 3>>& out)
+	{
+		if (!mesh || mesh->index < 0 || mesh->index >= (int)renderer->renderInfo.size())
+			return;
+
+		glm::mat4 meshMatrix = matrix * renderer->renderInfo[mesh->index].matrix;
+		for (const auto& face : mesh->faces)
+		{
+			std::array<glm::vec3, 3> tri;
+			bool valid = true;
+			for (int i = 0; i < 3; i++)
+			{
+				if (face.vertexIds[i] >= mesh->vertices.size())
+				{
+					valid = false;
+					break;
+				}
+				tri[i] = glm::vec3(meshMatrix * glm::vec4(mesh->vertices[face.vertexIds[i]], 1.0f));
+			}
+			if (valid)
+				out.push_back(tri);
+		}
+
+		for (auto child : mesh->children)
+			collectWorldTriangles(child, renderer, matrix, out);
+	}
+}
+
+void Map::addAutoGatActions(const std::vector<Node*>& nodes, float bandHeight, int defaultGatType, GroupAction* ga)
+{
+	auto gnd = rootNode->getComponent<Gnd>();
+	auto gat = rootNode->getComponent<Gat>();
+	if (!gnd || !gat || !ga)
+		return;
+
+	// tiles that already got an action in this batch, so overlapping models don't produce duplicates
+	std::set<std::pair<int, int>> handledTiles;
+
+	// terrain height below a world position, cached because most vertices are shared between faces
+	std::unordered_map<long long, float> terrainCache;
+	auto terrainHeightAt = [&](const glm::vec3& p) -> float // NaN when unknown
+	{
+		long long key = (static_cast<long long>(static_cast<int>(std::lround(p.x * 20.0f))) << 32) |
+			static_cast<unsigned int>(static_cast<int>(std::lround(p.z * 20.0f)));
+		auto it = terrainCache.find(key);
+		if (it != terrainCache.end())
+			return it->second;
+
+		float result = std::numeric_limits<float>::quiet_NaN();
+		glm::ivec2 tile((int)glm::floor(p.x / 5.0f), gat->height - (int)glm::floor(p.z / 5.0f) + 1);
+		if (gat->inMap(tile))
+		{
+			math::Ray ray(glm::vec3(p.x, glm::max(1000.0f, p.y + 100.0f), p.z), glm::vec3(0, -1, 0));
+			auto hit = gnd->rayCast(ray, true, tile.x / 2 - 2, tile.y / 2 - 2, tile.x / 2 + 2, tile.y / 2 + 2);
+			if (hit.y > 100000 || hit.y < -100000)
+				hit = gnd->rayCast(ray, true, tile.x / 2 - 6, tile.y / 2 - 6, tile.x / 2 + 6, tile.y / 2 + 6);
+			if (!(hit.y > 100000 || hit.y < -100000))
+				result = hit.y;
+		}
+		terrainCache[key] = result;
+		return result;
+	};
+
+	for (auto node : nodes)
+	{
+		if (!node)
+			continue;
+
+		node->traverse([&](Node* n)
+		{
+			auto rswModel = n->getComponent<RswModel>();
+			auto rsm = n->getComponent<Rsm>();
+			auto rsmRenderer = n->getComponent<RsmRenderer>();
+			if (!rswModel || !rsm || !rsmRenderer || !rsm->loaded || rsm->rootMesh == nullptr)
+				return;
+
+			// the matrix of a model that was just placed comes from the placement preview
+			std::vector<std::array<glm::vec3, 3>> triangles;
+			collectWorldTriangles(rsm->rootMesh, rsmRenderer, rsmRenderer->matrixCache, triangles);
+
+			int gatType = rswModel->gatType > -1 ? rswModel->gatType : defaultGatType;
+			const float margin = 0.05f; // so a model that is exactly aligned to the grid doesn't spill into its neighbours
+
+			for (const auto& tri : triangles)
+			{
+				// only faces that touch the ground: at least one corner close to (or below) the terrain under it
+				bool touchesGround = false;
+				for (int i = 0; i < 3 && !touchesGround; i++)
+				{
+					float ground = terrainHeightAt(tri[i]);
+					if (!std::isnan(ground) && tri[i].y <= ground + bandHeight)
+						touchesGround = true;
+				}
+				if (!touchesGround)
+					continue;
+
+				// project onto the ground plane and mark every GAT tile it overlaps
+				glm::vec2 flat[3] = { glm::vec2(tri[0].x, tri[0].z), glm::vec2(tri[1].x, tri[1].z), glm::vec2(tri[2].x, tri[2].z) };
+				glm::vec2 lo = glm::min(flat[0], glm::min(flat[1], flat[2]));
+				glm::vec2 hi = glm::max(flat[0], glm::max(flat[1], flat[2]));
+
+				int tileXMin = (int)glm::floor(lo.x / 5.0f);
+				int tileXMax = (int)glm::floor(hi.x / 5.0f);
+				int tileYMin = gat->height - (int)glm::floor(hi.y / 5.0f) + 1;
+				int tileYMax = gat->height - (int)glm::floor(lo.y / 5.0f) + 1;
+
+				for (int tx = glm::max(tileXMin, 0); tx <= glm::min(tileXMax, gat->width - 1); tx++)
+				{
+					for (int ty = glm::max(tileYMin, 0); ty <= glm::min(tileYMax, gat->height - 1); ty++)
+					{
+						if (handledTiles.count({ tx, ty }) > 0)
+							continue;
+
+						// tile bounds in world space, matching Gat::getPos
+						glm::vec2 rMin(5.0f * tx + margin, 5.0f * gat->height - 5.0f * ty + 5.0f + margin);
+						glm::vec2 rMax(5.0f * tx + 5.0f - margin, 5.0f * gat->height - 5.0f * ty + 10.0f - margin);
+						if (!triangleOverlapsRect(flat, rMin, rMax))
+							continue;
+
+						handledTiles.insert({ tx, ty });
+						if (gat->cubes[tx][ty]->gatType != gatType)
+							ga->addAction(new GatTileChangeAction(glm::ivec2(tx, ty), gat->cubes[tx][ty], gatType));
+					}
+				}
+			}
+		});
+	}
 }
 
 
