@@ -32,7 +32,8 @@ jobs:
     - name: Fix version
       shell: cmd
       run: |
-        echo #define VERSION ${{ github.run_number }}>Version.h
+        rem keep the space before the redirect below, a single digit right in front of it is read as a stream number and the version is lost
+        echo #define VERSION ${{ github.run_number }} >Version.h
         echo.>>Version.h
         type Version.h
 
