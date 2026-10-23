@@ -12,55 +12,126 @@ GRASS = m.add_texture("#0"); CLIFF = m.add_texture("#1"); EDGE = m.add_texture("
 DIRT = m.add_texture("#3"); BLOB = m.add_texture("#6")
 rng = np.random.default_rng(m.seed)
 
-# ---- terraces: smooth noise, quantised in soft steps so the contour lines become cliffs
-m.noise(scale=float(os.environ.get('TSCALE', 34)), amplitude=1.0, octaves=3, persistence=0.45)
-z = np.maximum(m.base * 2.3, -0.95)        # the lowest terrace is one broad flat floor (room for a lake)
-lvl = np.floor(z)
-frac = z - lvl
-FT = np.clip((frac - 0.5) / 0.2 + 0.5, 0, 1)      # 0..1 position inside one terrace step
-FT0 = FT.copy()
-FTU = (frac - 0.5) / 0.2 + 0.5                       # not clipped: -0.5..1.5 is the cliff face including its grass lips
+# ---- terrain: a few LARGE level regions (no tiny cliffs), one uniform soft step between them
+from scipy import ndimage as ndi
 STEP = 30.0
-m.base = STEP * (lvl + _smoothstep((frac - 0.5) / 0.2 + 0.5))
-m.noise(scale=7, amplitude=1.2, octaves=2, seed=3)          # a little roughness on the plateaus
+SIG = 1.1                                              # width of a cliff transition
+SEEDS = np.random.default_rng(m.seed + 100)
+def smooth_noise(scale, rg):
+    g = rg.random((int((W + 1) / scale) + 3, int((H + 1) / scale) + 3))
+    return ndi.zoom(g, scale, order=3)[:W + 1, :H + 1]
+z = smooth_noise(30, SEEDS) + 0.5 * smooth_noise(14, SEEDS)
+qs = np.quantile(z, [0.5])
+lvl = np.digitize(z, qs)                               # 0,1,2
+for _ in range(3):                                     # clean up: majority filter
+    cnt = np.stack([ndi.uniform_filter((lvl == k).astype(float), 15) for k in range(2)])
+    lvl = cnt.argmax(0)
+def drop_small(lvl, min_size=260):
+    lvl = lvl.copy()
+    for k in range(2):
+        lab, n = ndi.label(lvl == k)
+        for i in range(1, n + 1):
+            reg = lab == i
+            if reg.sum() < min_size:
+                lvl[reg] = -1
+    bad = lvl < 0
+    if bad.any():
+        idx = ndi.distance_transform_edt(bad, return_distances=False, return_indices=True)
+        lvl = lvl[idx[0], idx[1]]
+    return lvl
+for _ in range(2):
+    lvl = drop_small(lvl, 400)
+# levels may not jump by 2: a plateau of level 1 between 0 and 2
+Hs = ndi.gaussian_filter(lvl * STEP, SIG, mode="nearest")           # soft steps
+LV = Hs / STEP
+FT = LV - np.floor(LV + 1e-6)                                       # 0..1 inside one step
+m.base = Hs.copy()
 
-# ---- winding path(s), flattened into ramps wherever they cross a terrace
-y = float(rng.uniform(30, 70))
-main = [(2, y)]
-for x in range(16, 100, 14):
-    y = float(np.clip(y + rng.uniform(-17, 17), 14, 86))
-    main.append((x, y))
-branches = []
-for k in rng.choice(np.arange(1, len(main) - 1), size=2, replace=False):
-    bx, by = main[int(k)]
-    up = by > 50 if rng.random() < 0.3 else by < 50          # go to the roomier side
-    ty = 3 if up else 97
-    branches.append([(bx, by), (bx + rng.uniform(-14, 14), (by + ty) / 2 + rng.uniform(-6, 6)), (bx + rng.uniform(-16, 16), ty)])
-for _ in range(3):
-    m.path(main, width=3.8, flatten=0.9)
-    for br in branches:
-        m.path(br, width=3.0, flatten=0.9)
-m.smooth(1)
-
-# ---- lake on the lowest terrace, so one water level does not flood the rest
-L0 = float(m.base.min())
-slope = m.slope_map()
-best = None
-for _ in range(600):
-    u, v = rng.uniform(15, 85), rng.uniform(15, 85)
-    x, y = int(u), int(v)
-    if m.base[x, y] > L0 + 4:
-        continue
-    if m.masks["path"][max(x - 9, 0):x + 10, max(y - 9, 0):y + 10].any():
-        continue
-    sc = slope[max(x - 9, 0):x + 10, max(y - 9, 0):y + 10].mean() + 0.02 * m.base[max(x - 9, 0):x + 10, max(y - 9, 0):y + 10].mean()
-    if best is None or sc < best[0]:
-        best = (sc, u, v)
-if best is None:       # no low flat spot: fall back to a pond anywhere, water only level with its rim
-    best = (0, 50.0, 50.0); L0 = m.height_at(50, 50)
-_, lu, lv = best
-m.lake(lu, lv, 12, 10)
+# ---- paths stay on one level (cliffs are then never cut open) and avoid the cliff foot
+def region_dist(mask):
+    return ndi.distance_transform_edt(np.pad(mask, 1))[1:-1, 1:-1]       # the map edge counts as a border
+def walk(mask, rg, step=13.0, n=14, margin=6.5, start=None, heading=None, avoid=()):
+    d = region_dist(mask)
+    if start is None:
+        cand = np.argwhere(d > max(margin, d.max() * 0.6))
+        start = cand[int(rg.integers(len(cand)))]
+    pts = [(float(start[0]), float(start[1]))]
+    hd = rg.uniform(0, 2 * np.pi) if heading is None else heading
+    for _ in range(n):
+        offs = sorted(rg.uniform(-1.3, 1.3, 30), key=abs)       # smoothest valid turn first
+        for o in offs:
+            h2 = hd + o
+            nx, ny = pts[-1][0] + step * np.cos(h2), pts[-1][1] + step * np.sin(h2)
+            if 2 <= nx <= W - 2 and 2 <= ny <= H - 2 and d[int(nx), int(ny)] > margin and all(
+                    (nx - ax) ** 2 + (ny - ay) ** 2 > 64 for ax, ay in list(avoid) + pts[:-2]):
+                pts.append((nx, ny)); hd = h2 + rg.uniform(-0.12, 0.12); break
+        else:
+            break
+    return pts
+regions = []
+for k in range(2):
+    lab, n = ndi.label(lvl == k)
+    for i in range(1, n + 1):
+        regions.append(((lab == i).sum(), k, lab == i))
+regions.sort(key=lambda r: -r[0])
+m.base += (smooth_noise(9, np.random.default_rng(3)) - 0.5) * 1.2        # a little roughness
+# ---- lake in the biggest lowest region
+low = [r for r in regions if r[1] == 0] or regions[-1:]
+_, lk, lmask = max(low, key=lambda r: r[0])
+dl = region_dist(lmask)
+lu, lv = np.unravel_index(np.argmax(dl - 0.02 * np.abs(np.arange(W + 1)[:, None] - 50)), dl.shape)
+lrad = float(min(12, dl.max() * 0.62))
+L0 = float(lk * STEP)
+m.lake(float(lu), float(lv), lrad, 10)
 m.water(level=L0 - 3.5, amplitude=0.4)
+gxx, gyy = np.meshgrid(np.arange(W + 1), np.arange(H + 1), indexing="ij")
+lake_zone = np.hypot(gxx - lu, gyy - lv) < lrad + 7
+
+# ---- paths: long winding routes inside a region, away from the lake and from every cliff
+import heapq
+def route(mask, a, b, cost_extra):
+    """cheapest 8-connected way from cell a to cell b through mask"""
+    from skimage.graph import route_through_array
+    cost = np.where(mask, 1.0 + cost_extra, 1e6)
+    path, _ = route_through_array(cost, a, b, fully_connected=True, geometric=True)
+    return [tuple(c) for c in path]
+def smooth_path(cells, k=4.0, every=6):
+    pts = np.array(cells, dtype=float)
+    pts[:, 0] = ndi.gaussian_filter1d(pts[:, 0], k, mode="nearest")
+    pts[:, 1] = ndi.gaussian_filter1d(pts[:, 1], k, mode="nearest")
+    sel = list(range(0, len(pts), every)) + [len(pts) - 1]
+    return [(float(pts[i, 0]), float(pts[i, 1])) for i in sel]
+paths = []
+taken = np.zeros((W + 1, H + 1), dtype=bool)
+for (_, k, mask) in regions[:2]:
+    mk = mask & ~lake_zone
+    d = region_dist(mk)
+    ok_m = d > 6.5
+    if ok_m.sum() < 200:
+        continue
+    pts_ok = np.argwhere(ok_m)
+    # two far apart cells: pick a random one, then the farthest from it, then the farthest from that
+    a0 = pts_ok[int(rng.integers(len(pts_ok)))]
+    A = pts_ok[np.argmax(((pts_ok - a0) ** 2).sum(1))]
+    B = pts_ok[np.argmax(((pts_ok - A) ** 2).sum(1))]
+    wob = ndi.zoom(rng.random((9, 9)), 12, order=3)[:W + 1, :H + 1] * 16.0           # makes the route meander
+    cost = wob + np.where(taken, 40.0, 0.0) + np.clip(10.0 - d, 0, 10) * 0.4
+    cells = route(ok_m, tuple(A), tuple(B), cost)
+    if len(cells) < 20:
+        continue
+    pl = smooth_path(cells)
+    paths.append(pl)
+    taken |= ndi.binary_dilation(np.isin(np.arange((W + 1) * (H + 1)).reshape(W + 1, H + 1), []), iterations=0)
+    for (cx, cy) in cells:
+        taken[max(cx - 6, 0):cx + 7, max(cy - 6, 0):cy + 7] = True
+    # a branch from the middle to the farthest ok cell from there
+    mid = cells[len(cells) // 2]
+    far = pts_ok[np.argmax(((pts_ok - np.array(mid)) ** 2).sum(1) * (~taken[tuple(pts_ok.T)]))]
+    cb = route(ok_m, tuple(mid), tuple(far), cost + wob)
+    if len(cb) >= 14:
+        paths.append(smooth_path(cb))
+for pts in paths:
+    m.path(pts, width=3.8, flatten=0.4)
 
 # ---- texturing
 m.paint_all(GRASS)
@@ -71,11 +142,6 @@ dirt_cubes = (m.masks["path"] > 0.5) | ring
 m.masks["dirt"] = dirt_cubes.astype(float)
 # material wanted at every cube corner: 0 grass, 1 dirt, 2 rock
 mat = np.zeros((W + 1, H + 1), dtype=int)
-b = m.base
-steep = np.zeros_like(b, dtype=bool)
-for dx, dy in ((1, 0), (-1, 0), (0, 1), (0, -1)):
-    sh = np.roll(np.roll(b, dx, 0), dy, 1)
-    steep |= np.abs(b - sh) > 5.0
 shore = np.zeros((W + 1, H + 1), dtype=bool)
 cw = np.pad(ring, ((1, 1), (1, 1)))          # corner (x,y) touches cubes (x-1..x, y-1..y)
 shore = cw[:-1, :-1] | cw[1:, :-1] | cw[:-1, 1:] | cw[1:, 1:]
@@ -88,8 +154,7 @@ tex_paths = {i: TEXDIR + "prt_%s.bmp" % n for i, n in TEX.items()}
 lib = TileLib(tex_paths, plain={0: 0, 1: 3})
 for t in TEX:
     m.add_texture("#%d" % t)
-# ---- cliff faces: ONE continuous uv field (shared corners get the same uv), t across the step, s along the contour
-slope_c = m.slope_map()
+# ---- cliff faces, the prt_fild00 way: the texture runs one quarter per cube along the cliff, v follows the real height
 rock = {}
 CL = m.add_texture("#1")
 nearp = m.corner_path.copy()
@@ -98,18 +163,17 @@ for _ in range(2):
     for dx, dy in ((1, 0), (-1, 0), (0, 1), (0, -1), (1, 1), (-1, -1), (1, -1), (-1, 1)):
         nn |= np.roll(np.roll(nearp, dx, 0), dy, 1)
     nearp = nn
-T = np.clip(1.0 - (FTU + 0.5) / 2.0, 0.0, 1.0)          # v across the face, 0 = top lip (high side), 1 = bottom lip
-hb = m.base
+T = 0.92 - 0.84 * np.clip(FT, 0, 1)                   # 0.08 = top lip (high side) ... 0.92 = bottom lip
+hb = Hs
 for x in range(W):
     for y in range(H):
         cc = [(x, y), (x + 1, y), (x, y + 1), (x + 1, y + 1)]
-        tv = [T[a_, b_] for a_, b_ in cc]
-        if min(tv) >= 0.93 or max(tv) <= 0.07 or max(tv) - min(tv) < 0.1:
+        ftv = [FT[a_, b_] for a_, b_ in cc]
+        if min(ftv) > 0.96 or max(ftv) < 0.04:
             continue
         if any(nearp[a_, b_] for a_, b_ in cc) or any(shore[a_, b_] for a_, b_ in cc):
             continue
         rock[(x, y)] = cc
-# which way does each cliff run? (prt_fild00 maps one quarter of the texture per cube along the cliff)
 def axis_of(x, y):
     c = [hb[x, y], hb[x + 1, y], hb[x, y + 1], hb[x + 1, y + 1]]
     gx = abs((c[1] + c[3]) - (c[0] + c[2]))
@@ -133,6 +197,9 @@ if os.environ.get("PREVIEW"):
 
 # ---- model placement the way prt_fild00 does it: fixed scales, small clusters, a few dense stands
 TREE, PINE, BUSH, ROCK = "roo_fild\\tree.rsm", "roo_payon\\pine3.rsm", "roo_fild\\bush1.rsm", "ROO_fild\\rock4.rsm"
+rockm = np.zeros((W, H), dtype=bool)
+for (x_, y_) in rock:
+    rockm[max(x_ - 1, 0):x_ + 2, max(y_ - 1, 0):y_ + 2] = True
 sl = m.slope_map()
 m._update_water_mask(); m._slope = sl
 placed_xy = []
@@ -141,7 +208,7 @@ def ok(u, v, slope=0.4, gap=2.2):
     if not (3 < u < W - 3 and 3 < v < H - 3):
         return False
     x, y = int(u), int(v)
-    if any(m.masks[k][x, y] > 0.5 for k in ("water", "path", "dirt")) or sl[x, y] > slope or mat[x, y] == 2 or mat[x + 1, y + 1] == 2:
+    if any(m.masks[k][x, y] > 0.5 for k in ("water", "path", "dirt")) or sl[x, y] > slope or rockm[x, y]:
         return False
     return all((u - pu) ** 2 + (v - pv) ** 2 >= gap * gap for pu, pv in placed_xy)
 
@@ -180,7 +247,7 @@ for _ in range(34):
 # bushes in twos and threes, rocks along the cliff rims
 for _ in range(10):
     cluster([BUSH], [1], int(rng.integers(1, 4)), 1.6, SC, gap=2.5)
-rim = np.argwhere(mat == 2)
+rim = np.argwhere(rockm)
 for _ in range(16):
     if len(rim):
         cx, cy = rim[int(rng.integers(len(rim)))]
