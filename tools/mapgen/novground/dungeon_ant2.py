@@ -1,5 +1,5 @@
 """Lower-right ant-nest dungeon, UL-style: smooth cave slopes, black rock ceiling, baked atlases (antflat floor + moss/mine rock).
-Layout traced from the user's 'Ant Nest' guide.  Writes an_h/an_g/an_t json + prt_novaf%02d.bmp, preview an_pv.png."""
+Layout traced from the user's 'Ant Nest' guide.  Writes an_h/an_g/an_t json + prt_novag%02d.bmp, preview an_pv.png."""
 import json, os, numpy as np
 from PIL import Image, ImageDraw
 from scipy import ndimage as ndi
@@ -13,7 +13,7 @@ X0, Y0, NXc, NYc = 124, 4, 72, 72
 R = 4; NX, NY = NXc * R, NYc * R
 G = 4
 SLOT_TOP, SLOT_ATL0 = 201, 300
-SC_, CX_, YT_ = 18.5, 158.9, 62.0
+SC_, CX_, YT_ = 18.5, 158.9, 66.0
 def cc(px, py): return CX_ + (px - 428) / SC_, YT_ - py / SC_
 chambers = []
 corridors = [
@@ -45,7 +45,7 @@ _ok = (_ipx >= 0) & (_ipx < _lm.shape[1]) & (_ipy >= 0) & (_ipy < _lm.shape[0])
 _cm = np.zeros((NX, NY), bool); _cm[_ok] = _lm[_ipy[_ok], _ipx[_ok]] > 0
 floor_core0 = floor_core0 | _cm
 _ci = Image.fromarray((floor_core0[:, ::-1].T * 255).astype(np.uint8)); d = ImageDraw.Draw(_ci); img = _ci
-_P = [(159.0, 58.5), (159.7, 64.0), (158.3, 72.0), (158.3, 76.0)]
+_P = [(159.0, 62.5), (159.5, 67.0), (158.3, 72.0), (158.3, 76.0)]
 _P = [to_px(*p) for p in _P]; d.line(_P, fill=255, width=int(CW * R), joint="curve")
 for p in _P: d.ellipse([p[0] - CW * R / 2, p[1] - CW * R / 2, p[0] + CW * R / 2, p[1] + CW * R / 2], fill=255)
 floor0 = np.array(img)[::-1].T > 127
@@ -184,8 +184,6 @@ for n_, (x, y) in enumerate(baked):
     col = fl * (1 - wr[..., None]) + rk * wr[..., None]
     dfo = np.clip(fld(dF, wx, wy), 0, None); se = fld(SE, wx, wy)
     wb = smooth((dfo - 2.0) / 1.0) * smooth((db - 1.3) / 1.4)
-    _px, _py = cc(428, 305)
-    wb = np.maximum(wb, smooth(1.0 - np.hypot((wx - _px) / 4.6, (wy - _py) / 3.6)) * 1.0 * (1 - 0.0))
     col = col * (1 - wb[..., None])
     ao = 1 - 0.45 * np.exp(-((sd - 0.30) / 0.75) ** 2)
     col = col * ao[..., None] * np.clip(sh, 0.62, 1.25)[..., None]
@@ -205,7 +203,7 @@ for n_, (x, y) in enumerate(baked):
     tiles.append([x, y, SLOT_ATL0 + k, round(u0, 5), round(v1, 5), round(u1, 5), round(v1, 5), round(u0, 5), round(v0, 5), round(u1, 5), round(v0, 5)])
 for x, y in plain: tiles.append([x, y, SLOT_TOP, 0.06, 0.06, 0.14, 0.06, 0.06, 0.14, 0.14, 0.14])
 for k in range(natl):
-    Image.fromarray(atl[k]).quantize(colors=256, method=Image.Quantize.MEDIANCUT, dither=Image.Dither.FLOYDSTEINBERG).save(OUT + "prt_novaf%02d.bmp" % (k + 1))
+    Image.fromarray(atl[k]).quantize(colors=256, method=Image.Quantize.MEDIANCUT, dither=Image.Dither.FLOYDSTEINBERG).save(OUT + "prt_novag%02d.bmp" % (k + 1))
 # gat
 gx, gy = np.meshgrid(X0 + (np.arange(2 * NXc) + 0.5) / 2, Y0 + (np.arange(2 * NYc) + 0.5) / 2, indexing="ij")
 gi = np.clip(((gx - X0) * R).astype(int), 0, NX - 1); gj = np.clip(((gy - Y0) * R).astype(int), 0, NY - 1)
