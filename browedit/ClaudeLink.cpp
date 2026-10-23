@@ -126,14 +126,14 @@ namespace
 
 		if (name == "info")
 		{
-			result["map"] = map->name;
+			result["map"] = util::iso_8859_1_to_utf8(map->name);
 			result["width"] = gnd->width;
 			result["height"] = gnd->height;
 			result["gatWidth"] = gat->width;
 			result["gatHeight"] = gat->height;
 			result["textures"] = json::array();
 			for (auto t : gnd->textures)
-				result["textures"].push_back(t->file);
+				result["textures"].push_back(util::iso_8859_1_to_utf8(t->file));
 			int models = 0, objects = 0;
 			map->rootNode->traverse([&](Node* n) {
 				if (n->getComponent<RswObject>()) objects++;
@@ -438,12 +438,14 @@ namespace
 
 	void finishJob(Job& job, bool ok)
 	{
+		try {
 		json out;
 		out["file"] = job.name;
 		out["ok"] = ok;
 		out["results"] = job.results;
 		std::ofstream f(std::string(outboxDir) + "\\" + job.name + ".result.json");
-		f << out.dump(1);
+		f << out.dump(1, ' ', false, json::error_handler_t::replace);
+		} catch (...) {}
 		try { fs::rename(std::string(inboxDir) + "\\" + job.name + ".json", std::string(doneDir) + "\\" + job.name + ".json"); }
 		catch (...) {}
 	}
@@ -582,7 +584,7 @@ void BrowEdit::claudeLink()
 		st["alive"] = true;
 		st["time"] = now;
 		st["queue"] = (int)jobs.size();
-		st["map"] = map ? map->name : "";
+		st["map"] = map ? util::iso_8859_1_to_utf8(map->name) : "";
 		if (map)
 		{
 			auto gnd = map->rootNode->getComponent<Gnd>();
@@ -593,6 +595,6 @@ void BrowEdit::claudeLink()
 			}
 		}
 		std::ofstream f(std::string("claude_link\\status.json"));
-		f << st.dump(1);
+		f << st.dump(1, ' ', false, json::error_handler_t::replace);
 	}
 }
