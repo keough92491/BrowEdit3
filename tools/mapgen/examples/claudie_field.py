@@ -17,8 +17,10 @@ m.noise(scale=float(os.environ.get('TSCALE', 34)), amplitude=1.0, octaves=3, per
 z = np.maximum(m.base * 2.3, -0.95)        # the lowest terrace is one broad flat floor (room for a lake)
 lvl = np.floor(z)
 frac = z - lvl
-STEP = 18.0
-m.base = STEP * (lvl + _smoothstep((frac - 0.5) / 0.09 + 0.5))
+FT = np.clip((frac - 0.5) / 0.2 + 0.5, 0, 1)      # 0..1 position inside one terrace step
+FT0 = FT.copy()
+STEP = 30.0
+m.base = STEP * (lvl + _smoothstep((frac - 0.5) / 0.2 + 0.5))
 m.noise(scale=7, amplitude=1.2, octaves=2, seed=3)          # a little roughness on the plateaus
 
 # ---- winding path(s), flattened into ramps wherever they cross a terrace
@@ -73,44 +75,58 @@ steep = np.zeros_like(b, dtype=bool)
 for dx, dy in ((1, 0), (-1, 0), (0, 1), (0, -1)):
     sh = np.roll(np.roll(b, dx, 0), dy, 1)
     steep |= np.abs(b - sh) > 5.0
-cs = np.zeros((W, H), dtype=bool)                       # steep cubes, thickened so the rock band is 2+ cubes wide
-slope_c = m.slope_map()
-cs = slope_c > 0.42
-cs2 = cs.copy()
-for dx, dy in ((1, 0), (-1, 0), (0, 1), (0, -1)):
-    cs2 |= np.roll(np.roll(cs, dx, 0), dy, 1)
-cp = np.pad(cs2, 1)
-steep = cp[:-1, :-1] | cp[1:, :-1] | cp[:-1, 1:] | cp[1:, 1:]
-steep[0, :] = steep[-1, :] = steep[:, 0] = steep[:, -1] = False
-shore = np.zeros_like(steep)
-rc = np.pad(ring, 1)
-for dx in (0, 1):
-    for dy in (0, 1):
-        shore |= np.pad(rc[dx:dx + W, dy:dy + H], ((0, 1), (0, 1)))[: W + 1, : H + 1] if False else False
+shore = np.zeros((W + 1, H + 1), dtype=bool)
 cw = np.pad(ring, ((1, 1), (1, 1)))          # corner (x,y) touches cubes (x-1..x, y-1..y)
 shore = cw[:-1, :-1] | cw[1:, :-1] | cw[:-1, 1:] | cw[1:, 1:]
 dirt_c = m.corner_path | shore
-near = dirt_c.copy()
-for _ in range(2):
-    nn = near.copy()
-    for dx, dy in ((1, 0), (-1, 0), (0, 1), (0, -1), (1, 1), (-1, -1), (1, -1), (-1, 1)):
-        nn |= np.roll(np.roll(near, dx, 0), dy, 1)
-    near = nn
-mat[steep & ~near] = 2
 mat[dirt_c] = 1
 from tilelib import TileLib, render
 TEX = {0: "ÃÊ¿ø01", 1: "¾ð´ö01", 2: "ÃÊ¿ø02", 3: "Èë02", 4: "¾ð´ö03", 5: "¾ð´ö02", 6: "ÃÊ¿ø04", 7: "¾ð´ö10", 8: "¾ð´ö11", 9: "ÃÊ¿ø09"}
 TEXDIR = os.environ.get("TEXDIR", "/mnt/user-data/uploads/ROO_MAP/data/texture/roo_prtf/")
 tex_paths = {i: TEXDIR + "prt_%s.bmp" % n for i, n in TEX.items()}
-lib = TileLib(tex_paths)
+lib = TileLib(tex_paths, plain={0: 0, 1: 3})
 for t in TEX:
     m.add_texture("#%d" % t)
-sel = lib.solve(mat, np.random.default_rng(4))
+# ---- cliff faces: ONE continuous uv field (shared corners get the same uv), t across the step, s along the contour
+slope_c = m.slope_map()
+gx_, gy_ = np.gradient(FT0)
+gx_ = np.gradient(np.pad(FT0, 1, mode="edge"))[0][1:-1, 1:-1] if False else gx_
+tang = np.arctan2(gx_, -gy_)                     # direction along the contour
+tang = np.arctan2(*[np.convolve(np.ones(1), [1]) for _ in range(0)]) if False else tang
+rock = {}
+CL = m.add_texture("#1")
+nearp = m.corner_path.copy()
+for _ in range(2):
+    nn = nearp.copy()
+    for dx, dy in ((1, 0), (-1, 0), (0, 1), (0, -1), (1, 1), (-1, -1), (1, -1), (-1, 1)):
+        nn |= np.roll(np.roll(nearp, dx, 0), dy, 1)
+    nearp = nn
+for x in range(W):
+    for y in range(H):
+        cc = [(x, y), (x + 1, y), (x, y + 1), (x + 1, y + 1)]
+        f = [FT0[a, b] for a, b in cc]
+        if slope_c[x, y] < 0.3 or not (0 < max(f) and min(f) < 1) or max(f) - min(f) < 0.02:
+            continue
+        if any(nearp[a, b] for a, b in cc) or any(shore[a, b] for a, b in cc):
+            continue
+        rock[(x, y)] = cc
+fixed = set(rock)
+for (x, y), cc in rock.items():
+    uv = []
+    for a, b in cc:
+        t_ = 0.04 + 0.92 * (1.0 - FT0[a, b])
+        ang = tang[a, b]
+        s_ = 0.25 * (a * np.cos(ang) + b * np.sin(ang))
+        uv.append((s_, t_))
+    base_s = np.floor(min(u for u, _ in uv))
+    uv = [(u - base_s, t_) for u, t_ in uv]
+    m.cube_uv[(x, y)] = (CL, uv)
+sel = lib.solve(mat, np.random.default_rng(4), fixed=fixed)
 for (x, y), (ti, uv) in sel.items():
     m.cube_uv[(x, y)] = (m.add_texture("#%d" % ti), uv)
 dirt = dirt_cubes
 if os.environ.get("PREVIEW"):
-    render(m, tex_paths, 0, 0, W, H, os.environ["PREVIEW"], S=8)
+    render(m, tex_paths, 0, 0, W, H, os.environ["PREVIEW"], S=8, seams=True)
 
 # ---- model placement the way prt_fild00 does it: fixed scales, small clusters, a few dense stands
 TREE, PINE, BUSH, ROCK = "roo_fild\\tree.rsm", "roo_payon\\pine3.rsm", "roo_fild\\bush1.rsm", "ROO_fild\\rock4.rsm"
