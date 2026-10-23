@@ -94,6 +94,11 @@ def smooth_path(cells, k=4.0, every=6):
 allow = ~lake_zone
 for c in CFS:
     allow &= (np.abs(c.d) > c.w / 2 + 4.5) | (c.T < 0.02)    # clear of every rock band, except in the ramps
+rockc = np.zeros((W + 1, H + 1), dtype=bool)          # keep paths well away from every bit of rock
+for c in CFS:
+    for (x_, y_) in c.rock_cubes((0, W), (0, H)):
+        rockc[x_:x_ + 2, y_:y_ + 2] = True
+allow &= ndi.distance_transform_edt(~rockc) > 4.5
 allow[:4, :] = allow[-4:, :] = False; allow[:, :4] = allow[:, -4:] = False
 margin = np.minimum.reduce([np.abs(c.d) for c in CFS])
 cliffcost = np.clip(7.0 - margin, 0, 7) * 0.5
@@ -101,6 +106,12 @@ paths = []
 wob = ndi.zoom(rng.random((9, 9)), 12, order=3)[:W + 1, :H + 1] * 14.0           # makes the route meander
 top = int(LEVEL.max())
 cells_at = {k: np.argwhere(allow & (LEVEL == k) & (margin > 6)) for k in range(top + 1)}
+lab_, _n = ndi.label(allow)                            # pick the walkable area that links the most levels
+def _score(L):
+    lv = [k for k in cells_at if len(cells_at[k]) and (lab_[tuple(cells_at[k].T)] == L).any()]
+    return (len(lv), int((lab_ == L).sum()))
+Lbest = max(range(1, _n + 1), key=_score)
+cells_at = {k: (c[lab_[tuple(c.T)] == Lbest] if len(c) else c) for k, c in cells_at.items()}
 A = cells_at[0][int(rng.integers(len(cells_at[0])))]
 B = None
 for k in range(top, 0, -1):
@@ -110,7 +121,8 @@ for k in range(top, 0, -1):
         Bc = hc[dB > 40] if (dB > 40).any() else hc
         B = Bc[int(rng.integers(len(Bc)))]
         break
-main, _ = route(allow, tuple(A), tuple(B), wob + cliffcost)
+main, mc = route(allow, tuple(A), tuple(B), wob + cliffcost)
+assert mc < 1e5, 'no route between the levels'
 paths.append(smooth_path(main))
 taken = np.zeros((W + 1, H + 1), dtype=bool)
 for (cx, cy) in main:
@@ -126,8 +138,8 @@ for k in range(top + 1):
     if not len(cand):
         continue
     far = cand[np.argmax(((cand - np.array(st)) ** 2).sum(1))]
-    cb, _ = route(allow & (LEVEL == k), tuple(st), tuple(far), wob + cliffcost)
-    if len(cb) >= 14:
+    cb, cc_ = route(allow & (LEVEL == k), tuple(st), tuple(far), wob + cliffcost)
+    if len(cb) >= 14 and cc_ < 1e5:
         paths.append(smooth_path(cb))
 PATHW = 3.2
 for pts in paths:
