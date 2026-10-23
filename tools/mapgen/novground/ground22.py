@@ -169,7 +169,8 @@ def sdist(x, y):                          # nearest / farthest distance from CAM
     nx = min(max(CAMP[0], x), x + 1); ny = min(max(CAMP[1], y), y + 1)
     fx = x if abs(CAMP[0] - x) > abs(CAMP[0] - x - 1) else x + 1; fy = y if abs(CAMP[1] - y) > abs(CAMP[1] - y - 1) else y + 1
     return np.hypot(nx - CAMP[0], ny - CAMP[1]), np.hypot(fx - CAMP[0], fy - CAMP[1])
-ZI, ZO = 1.5, 2.4                          # transition half-widths: inner (rosette|brick), outer (brick|grass)
+SR, SB = 3.6, 2.4                         # cubes per texture repeat (rosette, brick): ~20% bigger
+ZI, ZO = 1.5, 1.6                          # transition half-widths: inner (rosette|brick), outer (brick|grass)
 RIM = []
 REG = {}
 for x in range(W):
@@ -189,13 +190,13 @@ for n_, (x, y) in enumerate(RIM):
     wx, wy = x + FX, y + FY
     r = np.hypot(wx - CAMP[0], wy - CAMP[1])
     # irregular, broken-up edges (world-continuous noise, so neighbouring cells match)
-    ro = R2 + 0.95 * NL(wx, wy) + 0.45 * NM(wx, wy) + 0.22 * NF(wx, wy)       # outer edge, wanders +-1.5 cubes
+    ro = R2 + 0.22 * NL(wx, wy) + 0.08 * NM(wx, wy)       # outer edge, wanders +-1.5 cubes
     ri = R1                                                                    # rosette circle stays a perfect circle
-    a2 = SM((ro - r) / 0.75 + 0.5 + 0.30 * NG(wx, wy) + 0.18 * NF(wx, wy))                          # wide soft stone -> ground fade, grainy
+    a2 = SM((ro - r) / 0.9 + 0.5 + 0.07 * NG(wx, wy))                          # wide soft stone -> ground fade, grainy
     a1 = SM((ri - r) / 0.9 + 0.5 + 0.04 * NG(wx, wy))
     i3, j3 = (x - cxi0) % 3, (y - cyi0) % 3; i2, j2 = (x - cxi0) % 2, (y - cyi0) % 2; i4, j4 = x % 4, y % 4
-    ros = samp(T_ROS, (i3 + FX) / 3, 1 - (j3 + FY) / 3)
-    brk = samp(T_BRK, (i2 + FX) / 2, 1 - (j2 + FY) / 2)
+    ros = samp(T_ROS, (wx - cxi0) / SR, 1 - (wy - cyi0) / SR)
+    brk = samp(T_BRK, (wx - cxi0) / SB, 1 - (wy - cyi0) / SB)
     gr = samp(T_GRASS, (i4 + FX) / 4, 1 - (j4 + FY) / 4)
     dt = samp(T_DIRT, (i4 + FX) / 4, 1 - (j4 + FY) / 4)
     fcorn = field[x:x + 2, y:y + 2]
@@ -203,11 +204,11 @@ for n_, (x, y) in enumerate(RIM):
     ad = SM(fi / 0.6 + 0.5)
     # worn, dusty earth just outside the stones, thinning out into grass
     beyond = r - ro
-    wd = SM(1.0 - beyond / 2.0) * SM(beyond / 0.5 + 0.8) * np.clip(0.30 + 0.30 * NM(wx + 40, wy) + 0.15 * NG(wx, wy), 0, 0.7)
+    wd = SM(1.0 - beyond / 1.3) * SM(beyond / 0.5 + 0.8) * np.clip(0.30 + 0.10 * NM(wx + 40, wy), 0, 0.5)
     ground = gr * (1 - np.maximum(ad, wd)[..., None]) + dt * np.maximum(ad, wd)[..., None]
     stone = ros * a1[..., None] + brk * (1 - a1[..., None])
     # stone fades into the ground; the brick ring is also dusted with soil near its outer edge
-    dust = SM((r - (ro - 1.2)) / 1.2) * 0.22 * (0.6 + 0.4 * NM(wx, wy + 40))
+    dust = SM((r - (ro - 0.9)) / 0.9) * 0.15 * (0.6 + 0.4 * NM(wx, wy + 40))
     stone = stone * (1 - dust[..., None]) + dt * dust[..., None]
     img = stone * a2[..., None] + ground * (1 - a2[..., None])
     k, c = divmod(n_, NCELL); cy_, cx_ = divmod(c, ATL // CELL)
@@ -236,10 +237,12 @@ for x in range(W):
         if (x, y) in RIMUV: ti, uv = RIMUV[(x, y)]
         elif (x, y) in REG:
             ti = REG[(x, y)]
-            n_ = 3 if ti == 6 else 2
-            i_, j_ = (x - cxi0) % n_, (y - cyi0) % n_
-            u0_, u1_ = i_ / n_, (i_ + 1) / n_
-            vh1, vh3 = 1 - j_ / n_, 1 - (j_ + 1) / n_
+            S_ = SR if ti == 6 else SB
+            fx0, fy0 = (x - cxi0) / S_, (y - cyi0) / S_
+            u0_ = fx0 - np.floor(fx0); u1_ = u0_ + 1.0 / S_
+            vs_ = fy0 - np.floor(fy0)
+            vh1, vh3 = 1 - vs_, 1 - vs_ - 1.0 / S_
+            if vh3 < 0: vh1, vh3 = vh1 + 1, vh3 + 1
             uv = [(u0_, vh1), (u1_, vh1), (u0_, vh3), (u1_, vh3)]
         used[ti] = used.get(ti, 0) + 1; cube_uv[(x, y)] = (ti, uv)
         tiles.append([x, y, ti] + [round(c, 4) for (a, b) in uv for c in (a, b)])
