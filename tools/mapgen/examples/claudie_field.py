@@ -52,7 +52,7 @@ lvl = mk0.astype(int) + mk1.astype(int)
 CFS = []
 for k, mk in enumerate((mk0, mk1)):
     if mk.any() and (~mk).any():
-        CFS.append(CliffField(mk, W + 1, H + 1, step=STEP, w=float(os.environ.get("CLIFFW", 3.0)), wt=float(os.environ.get("CLIFFWT", 3.0)), rng=np.random.default_rng(m.seed + 7 + k)))
+        CFS.append(CliffField(mk, W + 1, H + 1, step=STEP, w=float(os.environ.get("CLIFFW", 3.0)), wt=float(os.environ.get("CLIFFWT", 3.0)), end_tex=os.environ.get("TEXDIR", "/mnt/user-data/uploads/ROO_MAP/data/texture/roo_prtf/") + "prt_¾ð´ö10.bmp", rng=np.random.default_rng(m.seed + 7 + k)))
 m.base = sum(c.height for c in CFS)
 m.base += (smooth_noise(9, np.random.default_rng(3)) - 0.5) * 0.8        # a little roughness
 for c in CFS:
@@ -185,6 +185,9 @@ for (x, y), (kind, uv) in rockuv.items():
     m.cube_uv[(x, y)] = (CLEND if kind == "end" else CL, uv)
 EDGE = m.add_texture("#2")
 edgeuv = EF.edge_cubes((0, W), (0, H), skip=set(rockuv))
+from cliffs import cube_stretch
+for key in [k for k, uv in edgeuv.items() if cube_stretch(m.base, k[0], k[1], uv) > 2.2]:
+    del edgeuv[key]                                   # would smear: leave to the plain dirt / grass tile
 for key, uv in edgeuv.items():
     m.cube_uv[key] = (EDGE, uv)
 sel = lib.solve(mat, np.random.default_rng(4), fixed=set(rockuv) | set(edgeuv))

@@ -73,6 +73,6 @@ class EdgeField:
                     continue
                 vs = vs - np.floor(vs.min())
                 us = EDGE_U - self.scale * dd
-                us = np.clip(us, -0.12, 0.85)
+                us = np.clip(us, -0.06, 0.85)         # stay inside the dirt strip: the far border of the texture is at 0.88
                 out[(x, y)] = [(float(us[i]), float(vs[i])) for i in range(4)]
         return out
