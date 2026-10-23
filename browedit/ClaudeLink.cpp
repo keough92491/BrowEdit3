@@ -95,7 +95,9 @@ namespace
 		int idx = findTexture(gnd, file);
 		if (idx >= 0)
 			return idx;
-		map->doAction(new GndTextureAddAction(file), browEdit);
+		// names in the JSON are UTF-8; the map stores raw (cp949 as latin-1) bytes, so "ÇÊµå¹Ù´Ú\\x" style names must be converted back
+		std::string raw = util::utf8_to_iso_8859_1(file);
+		map->doAction(new GndTextureAddAction(raw), browEdit);
 		idx = findTexture(gnd, file);
 		if (idx < 0)
 			throw std::runtime_error("could not add texture " + file);
