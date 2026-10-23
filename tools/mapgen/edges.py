@@ -74,7 +74,7 @@ class EdgeField:
                 if ct.closed:
                     per = ct.period
                     vs = vs[0] + ((vs - vs[0] + per / 2) % per) - per / 2
-                if vs.max() - vs.min() > 0.9:
+                if vs.max() - vs.min() > 0.6:
                     continue
                 vs = vs - np.floor(vs.min())
                 us = self.u0 + self.sgn * self.scale * dd
