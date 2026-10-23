@@ -145,7 +145,7 @@ def _cdist(ct, a, b):
 class CliffField:
     """Evaluates height / texture coordinates at any set of points (corner grid)."""
 
-    def __init__(self, inside, W1, H1, step=30.0, w=2.6, wr=14.0, rng=None, sigma=3.0, gaps=True, wt=None, kk=0.2, end_tex=None, desert=False, band=(0.08, 0.92)):
+    def __init__(self, inside, W1, H1, step=30.0, w=2.6, wr=14.0, rng=None, sigma=3.0, gaps=True, wt=None, kk=0.2, end_tex=None, desert=False, band=(0.08, 0.92), gap_spacing=70.0):
         self.W1, self.H1, self.step, self.w, self.wr = W1, H1, step, w, wr
         self.wt = wt or w
         self.kk = kk
@@ -158,7 +158,7 @@ class CliffField:
         self.Ds = signed_field(inside, sigma)
         self.contours = extract_contours(self.Ds)
         if gaps:
-            place_gaps(self.contours, self.Ds, W1, H1, self.rng)
+            place_gaps(self.contours, self.Ds, W1, H1, self.rng, spacing=gap_spacing)
         pts = np.vstack([c.pts for c in self.contours])
         self.cid = np.concatenate([np.full(len(c.pts), i) for i, c in enumerate(self.contours)])
         self.sall = np.concatenate([c.s for c in self.contours])
