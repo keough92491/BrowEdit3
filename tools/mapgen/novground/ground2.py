@@ -47,11 +47,11 @@ for name, pts in ROADS.items():
     nrm = np.stack([-t[:, 1], t[:, 0]], 1)
     # meander: slow wander plus a finer wobble, tapered to 0 where the road joins the plaza
     sarc = np.arange(n) * 0.6
-    off = noise1(n, 55, rng) * 7.0 + noise1(n, 18, rng) * 2.0 + 2.6 * np.sin(sarc * 2 * np.pi / rng.uniform(32, 46) + rng.uniform(0, 6)) + 1.2 * np.sin(sarc * 2 * np.pi / rng.uniform(14, 20) + rng.uniform(0, 6))
+    off = noise1(n, 55, rng) * 11.0 + noise1(n, 18, rng) * 2.0 + 2.6 * np.sin(sarc * 2 * np.pi / rng.uniform(32, 46) + rng.uniform(0, 6)) + 1.2 * np.sin(sarc * 2 * np.pi / rng.uniform(14, 20) + rng.uniform(0, 6))
     ramp = np.clip(np.hypot(q[:, 0] - CAMP[0], q[:, 1] - CAMP[1]) / 14.0 - 0.7, 0, 1)
     q = q + nrm * (off * ramp)[:, None]
     q = smooth(q, 6)
-    w0 = 4.4 if name in ("north", "west", "east", "south") else 3.9
+    w0 = 5.0 if name in ("north", "west", "east", "south") else 3.9
     wid = w0 * (1.0 + noise1(n, 50, rng) * 1.1 + 0.18 * np.sin(np.arange(n) * 0.6 * 2 * np.pi / rng.uniform(14, 22) + rng.uniform(0, 6)))
     wid = np.clip(wid, w0 * 0.72, w0 * 1.5)
     centre_lines.append((q, wid))
@@ -69,8 +69,11 @@ for q, wid in centre_lines:
 ang = np.arctan2(cy - CAMP[1], cx - CAMP[0])
 rad = 14.5 + 1.8 * np.sin(3 * ang + 0.7) + 1.1 * np.sin(5 * ang + 2.0) + 0.7 * np.sin(8 * ang)
 
+wb = ndi.zoom(rng.random((Wc // 6 + 4, Hc // 6 + 4)), 6, order=3)[:Wc, :Hc] - 0.5
+wb2 = ndi.zoom(rng.random((Wc // 3 + 4, Hc // 3 + 4)), 3, order=3)[:Wc, :Hc] - 0.5
+field = np.where(field > -3.5, field + 0.9 * wb + 0.5 * wb2, field)     # irregular, hand-worn edges
 field = ndi.gaussian_filter(field, 0.7)
-EF = EdgeField(field, Wc, Hc, np.random.default_rng(11), fold=(0.12, 0.17), lo=-0.2)
+EF = EdgeField(field, Wc, Hc, np.random.default_rng(11), lo=-0.04, straddle=True)
 mat = np.zeros((Wc, Hc), int); mat[EF.dd > 0] = 1
 st = ndi.generate_binary_structure(2, 1)
 m_ = ndi.binary_closing(mat == 1, st, iterations=1); m_ = ndi.binary_opening(m_, st, iterations=1)
@@ -134,4 +137,8 @@ S = 24
 render(int(CAMP[0]) - 36, int(CAMP[1]) - 4, 26, 10, SCR + "ng_r2.png")
 print("edge cubes", len(edgeuv))
 S = 40
-render(int(CAMP[0]) + 8, int(CAMP[1]) + 4, 22, 12, SCR + "ng_r3.png")
+render(int(CAMP[0]) - 34, int(CAMP[1]) - 4, 18, 10, SCR + "ng_r3.png")
+if os.environ.get("DEBUG"):
+    ks = sorted(k for k in edgeuv if abs(k[1] - (int(CAMP[1]) + 0)) < 25 and k[0] < int(CAMP[0]) - 20)
+    for k in ks[:16]:
+        print(k, [(round(a, 2), round(b, 2)) for a, b in edgeuv[k]], [round(float(EF.dd[k[0] + i, k[1] + j]), 2) for i, j in ((0, 0), (1, 0), (0, 1), (1, 1))])

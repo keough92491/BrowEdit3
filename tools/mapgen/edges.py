@@ -10,9 +10,10 @@ EDGE_U = 0.13          # where the dirt/grass line sits in the texture (dirt for
 
 
 class EdgeField:
-    def __init__(self, field, W1, H1, rng, scale=0.25, u0=EDGE_U, sgn=-1.0, lo=-0.06, hi=0.85, fold=None):
+    def __init__(self, field, W1, H1, rng, scale=0.25, u0=EDGE_U, sgn=-1.0, lo=-0.06, hi=0.85, fold=None, straddle=False):
         """field: smooth scalar, > 0 in the dirt, 0 on the edge (a distance, so the outline has no cube staircase)"""
         self.scale = scale
+        self.straddle = straddle
         self.fold = fold                 # (units of u per cell, width of the dirt band): dirt side folds back and forth inside the band instead of clipping
         self.u0, self.sgn, self.lo, self.hi = u0, sgn, lo, hi
         self.Ds = field
@@ -59,6 +60,8 @@ class EdgeField:
                     continue
                 cc = [(x, y), (x + 1, y), (x, y + 1), (x + 1, y + 1)]
                 dd = np.array([self.dd[a, b] for a, b in cc])
+                if self.straddle and (dd.min() >= 0 or dd.max() <= 0):
+                    continue
                 if dd.min() > 1.0 or dd.max() < -1.0:
                     continue
                 cids = [int(self.ci[a, b]) for a, b in cc]
