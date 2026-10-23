@@ -1,5 +1,5 @@
 """Lower-right ant-nest dungeon, UL-style: smooth cave slopes, black rock ceiling, baked atlases (antflat floor + moss/mine rock).
-Layout traced from the user's 'Ant Nest' guide.  Writes an_h/an_g/an_t json + prt_novab%02d.bmp, preview an_pv.png."""
+Layout traced from the user's 'Ant Nest' guide.  Writes an_h/an_g/an_t json + prt_novac%02d.bmp, preview an_pv.png."""
 import json, os, numpy as np
 from PIL import Image, ImageDraw
 from scipy import ndimage as ndi
@@ -8,23 +8,23 @@ OUT = "/mnt/user-data/outputs/"
 TEX = "/mnt/user-data/uploads/texture/"
 MJ = TEX + "1ÇÊµå¹Ù´Ú/Æó±¤´øÀü-%02d.bmp"
 ANT = "/mnt/user-data/uploads/Claude_BORF _normal/export/anthell01/data/texture/ÇÊµå¹Ù´Ú/antflat-%d.bmp"
-RISE, SLOPE, SLOPE_B = 28.0, 3.0, 3.5
+RISE, SLOPE, SLOPE_B = 28.0, 2.2, 3.5
 X0, Y0, NXc, NYc = 124, 4, 72, 72
 R = 4; NX, NY = NXc * R, NYc * R
 G = 4
 SLOT_TOP, SLOT_ATL0 = 201, 300
-SC_, CX_, YT_ = 21.3, 158.9, 60.9
-def cc(px, py): return CX_ + (px - 545) / SC_, YT_ - py / SC_
-chambers = [((545, 95), 105, 88), ((190, 445), 115, 105), ((905, 430), 110, 95), ((545, 570), 85, 72), ((545, 905), 185, 115)]
+SC_, CX_, YT_ = 18.5, 158.9, 62.0
+def cc(px, py): return CX_ + (px - 428) / SC_, YT_ - py / SC_
+chambers = []
 corridors = [
-    [(470, 150), (400, 195), (330, 240), (270, 295), (225, 350), (205, 395)],
-    [(620, 150), (690, 195), (760, 240), (820, 295), (870, 345), (895, 385)],
-    [(200, 500), (212, 590), (250, 690), (320, 770), (390, 825), (440, 860)],
-    [(905, 500), (885, 600), (845, 700), (780, 780), (700, 830), (650, 865)],
-    [(545, 170), (545, 300), (545, 420), (545, 500)],
-    [(545, 640), (545, 720), (545, 800)],
+    [(330, 176), (255, 205), (205, 250), (165, 300), (148, 340)],
+    [(530, 182), (610, 205), (668, 245), (698, 288), (702, 320)],
+    [(135, 520), (150, 585), (195, 645), (250, 700), (300, 738)],
+    [(715, 495), (705, 560), (672, 630), (620, 690), (570, 722)],
+    [(428, 200), (428, 240), (422, 300), (416, 380), (428, 450)],
+    [(428, 570), (428, 640), (430, 700)],
 ]
-CW = 3.4; SPW = 2.6
+CW = 3.2; SPW = 2.3
 S_ = lambda t: (lambda u: u * u * (3 - 2 * u))(np.clip(t, 0, 1))
 def to_px(x, y): return ((x - X0) * R, (NY - 1) - (y - Y0) * R)
 img = Image.new("L", (NX, NY), 0); d = ImageDraw.Draw(img)
@@ -36,7 +36,15 @@ for (cx, cy), rx, ry in chambers:
     d.ellipse([px - ax * R, py - ay * R, px + ax * R, py + ay * R], fill=255)
 for i, c in enumerate(corridors): line(c, SPW if i >= 4 else CW)
 floor_core0 = np.array(img)[::-1].T > 127
-_P = [(CX_, 56.4), (159.7, 64.0), (158.3, 72.0), (158.3, 76.0)]
+_lm = np.load(os.path.join(os.path.dirname(os.path.abspath(__file__)), "ant_layout_mask.npy")).astype(float)
+_lm = ndi.binary_dilation(_lm, iterations=3)
+_gx, _gy = np.meshgrid(X0 + (np.arange(NX) + 0.5) / R, Y0 + (np.arange(NY) + 0.5) / R, indexing="ij")
+_ipx = np.round(428 + (_gx - CX_) * SC_).astype(int); _ipy = np.round((YT_ - _gy) * SC_).astype(int)
+_ok = (_ipx >= 0) & (_ipx < _lm.shape[1]) & (_ipy >= 0) & (_ipy < _lm.shape[0])
+_cm = np.zeros((NX, NY), bool); _cm[_ok] = _lm[_ipy[_ok], _ipx[_ok]] > 0
+floor_core0 = floor_core0 | _cm
+_ci = Image.fromarray((floor_core0[:, ::-1].T * 255).astype(np.uint8)); d = ImageDraw.Draw(_ci); img = _ci
+_P = [(159.0, 58.5), (159.7, 64.0), (158.3, 72.0), (158.3, 76.0)]
 _P = [to_px(*p) for p in _P]; d.line(_P, fill=255, width=int(CW * R), joint="curve")
 for p in _P: d.ellipse([p[0] - CW * R / 2, p[1] - CW * R / 2, p[0] + CW * R / 2, p[1] + CW * R / 2], fill=255)
 floor0 = np.array(img)[::-1].T > 127
@@ -47,7 +55,7 @@ def nz(sig):
 noise, noise2, noiseL = nz(5), nz(2), nz(7)
 fm = ndi.gaussian_filter(floor0.astype(float), 0.8 * R) + 0.05 * noise2
 floor = fm > 0.5
-floor_w = ndi.distance_transform_edt(~floor) / R <= 0.8
+floor_w = ndi.distance_transform_edt(~floor) / R <= 0.6
 dF = ndi.distance_transform_edt(~floor_w) / R
 # rock block = interior of the user's red outline (screenshot A), mapped through two homographies
 import cv2
@@ -137,7 +145,7 @@ shade_f = 1 + 0.6 * ((-gzx * Lv[0] - gzy * Lv[1] + Lv[2]) / nrm - Lv[2])
 def fld(a, wx, wy): return ndi.map_coordinates(a, [(wx - X0) * R - 0.5, (wy - Y0) * R - 0.5], order=1, mode="nearest")
 nz1 = nz(0.5); nz2 = nz(0.25); nz3a = nz(2.2); nzf = nz(1.6)
 smooth = S_
-glows = [cc(545, 95), cc(545, 905)]
+glows = [cc(425, 120), cc(425, 800)]
 CELL, ATLW, ATLH = 40, 1024, 512
 PERA, PERY = ATLW // CELL, ATLH // CELL; NC = PERA * PERY
 cs_ = (np.arange(CELL) + 0.5) / CELL
@@ -174,7 +182,7 @@ for n_, (x, y) in enumerate(baked):
     wr = smooth((sd + 0.12 + 0.30 * n1 + 0.10 * n2) / 0.85)
     col = fl * (1 - wr[..., None]) + rk * wr[..., None]
     dfo = np.clip(fld(dF, wx, wy), 0, None); se = fld(SE, wx, wy)
-    wb = smooth((dfo - 2.3) / 1.2) * smooth((db - 1.3) / 1.4)
+    wb = smooth((dfo - 2.0) / 1.0) * smooth((db - 1.3) / 1.4)
     col = col * (1 - wb[..., None])
     ao = 1 - 0.45 * np.exp(-((sd - 0.30) / 0.75) ** 2)
     col = col * ao[..., None] * np.clip(sh, 0.62, 1.25)[..., None]
@@ -194,7 +202,7 @@ for n_, (x, y) in enumerate(baked):
     tiles.append([x, y, SLOT_ATL0 + k, round(u0, 5), round(v1, 5), round(u1, 5), round(v1, 5), round(u0, 5), round(v0, 5), round(u1, 5), round(v0, 5)])
 for x, y in plain: tiles.append([x, y, SLOT_TOP, 0.06, 0.06, 0.14, 0.06, 0.06, 0.14, 0.14, 0.14])
 for k in range(natl):
-    Image.fromarray(atl[k]).quantize(colors=256, method=Image.Quantize.MEDIANCUT, dither=Image.Dither.FLOYDSTEINBERG).save(OUT + "prt_novab%02d.bmp" % (k + 1))
+    Image.fromarray(atl[k]).quantize(colors=256, method=Image.Quantize.MEDIANCUT, dither=Image.Dither.FLOYDSTEINBERG).save(OUT + "prt_novac%02d.bmp" % (k + 1))
 # gat
 gx, gy = np.meshgrid(X0 + (np.arange(2 * NXc) + 0.5) / 2, Y0 + (np.arange(2 * NYc) + 0.5) / 2, indexing="ij")
 gi = np.clip(((gx - X0) * R).astype(int), 0, NX - 1); gj = np.clip(((gy - Y0) * R).astype(int), 0, NY - 1)
