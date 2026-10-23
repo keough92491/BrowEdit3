@@ -1,5 +1,5 @@
 """Lower-right ant-nest dungeon, UL-style: smooth cave slopes, black rock ceiling, baked atlases (antflat floor + moss/mine rock).
-Layout traced from the user's 'Ant Nest' guide.  Writes an_h/an_g/an_t json + prt_novak%02d.bmp, preview an_pv.png."""
+Layout traced from the user's 'Ant Nest' guide.  Writes an_h/an_g/an_t json + prt_novam%02d.bmp, preview an_pv.png."""
 import json, os, numpy as np
 from PIL import Image, ImageDraw
 from scipy import ndimage as ndi
@@ -128,6 +128,10 @@ def make_tileable(a):
 def flat(a):                                   # remove low-frequency lighting
     lo = ndi.gaussian_filter(a, (18, 18, 0), mode="grid-wrap"); return np.clip(a - lo + lo.mean((0, 1)), 0, 255)
 A4, A1, A3, A2 = [load(ANT % n) for n in (4, 1, 3, 2)]
+GR = load(TEX + "ÇÊµå¹Ù´Ú/prt_ÃÊ¿ø01.bmp"); SDT = load(TEX + "ÇÊµå¹Ù´Ú/prt_Èë02.bmp")
+def tile_at(img, wx, wy):
+    u = (wx % 4) / 4 * img.shape[1]; v = (1 - (wy % 4) / 4) * img.shape[0]
+    return np.stack([ndi.map_coordinates(img[..., k], [v - 0.5, u - 0.5], order=1, mode="grid-wrap") for k in range(3)], -1)
 cr = lambda a: a[14:242, 14:242]
 F1 = make_tileable(flat(cr(A4))); F2 = make_tileable(flat(cr(A1))); F3 = F2
 RK3, RK7 = load(MJ % 3), load(MJ % 7)
@@ -177,13 +181,13 @@ for n_, (x, y) in enumerate(baked):
     sd = fld(SD, wx, wy); db = fld(dB, wx, wy); sh = fld(shade_f, wx, wy)
     n1 = fld(nz1, wx, wy); n2 = fld(nz2, wx, wy)
     mf = smooth(0.5 + 0.7 * fld(nzf, wx, wy))[..., None]
-    fl = per_tex(F1, wx, wy, 3.0, 3.0) * mf + per_tex(F3, wx, wy, 3.4, 3.4, 1.1, 0.6) * (1 - mf)
+    fl = per_tex(F1, wx, wy, 3.0, 3.0)
     fl = fl * np.array([0.60, 0.56, 0.52])
     for gx_, gy_ in glows:
         gd = np.hypot(wx - gx_, wy - gy_); fl = fl + np.array([150, 80, 25.0]) * np.exp(-(gd / 3.4) ** 2)[..., None]
-    rkA = per_tex(T3, wx, wy, 3.0, 2.0); rkB = per_tex(T7, wx, wy, 4.4, 3.0, 1.3, 0.7)
+    rkA = per_tex(T3, wx, wy, 1.9, 1.3); rkB = per_tex(T7, wx, wy, 2.7, 1.8, 1.3, 0.7)
     mm = smooth(0.5 + 0.55 * fld(nz3a, wx, wy))[..., None]
-    moss = per_tex(F2, wx, wy, 2.2, 2.2, 0.4, 0.9)
+    moss = per_tex(F2, wx, wy, 1.4, 1.4, 0.4, 0.9)
     rk = (rkA * mm + rkB * (1 - mm)) * 0.62 + moss * np.array([0.62, 0.72, 0.45]) * 0.55
     cz = fld(nzc, wx, wy); rk = rk * (1 - 0.5 * np.exp(-(cz / 0.16) ** 2))[..., None]          # dark crevices / strata
     rk = rk * (0.8 + 0.35 * smooth(0.5 + 0.5 * fld(nz3a, wx, wy)))[..., None]
@@ -195,9 +199,9 @@ for n_, (x, y) in enumerate(baked):
     ao = 1 - 0.45 * np.exp(-((sd - 0.30) / 0.75) ** 2)
     col = col * ao[..., None] * np.clip(sh, 0.5, 1.35)[..., None]
     wg = (1 - smooth((se + 0.7 + 0.35 * n1 + 0.1 * n2) / 2.3)) * smooth(dfo / 1.2)
-    out = GRASS + 0 * col
+    out = tile_at(GR, wx, wy)
     wsand = smooth((wy - 67.0) / 2.5)[..., None]                       # mouth: dirt floor fades into the sand road
-    outc = out * (1 - wsand * (se[..., None] < 0)) + SAND * wsand * (se[..., None] < 0)
+    outc = out * (1 - wsand * (se[..., None] < 0)) + tile_at(SDT, wx, wy) * wsand * (se[..., None] < 0)
     col = col * (1 - wg[..., None]) + outc * wg[..., None]
     wcv = 1 - smooth((-se - 0.2 + 0.3 * n1) / 2.6)
     col = col * wcv[..., None] + outc * (1 - wcv[..., None])
@@ -210,7 +214,7 @@ for n_, (x, y) in enumerate(baked):
     tiles.append([x, y, SLOT_ATL0 + k, round(u0, 5), round(v1, 5), round(u1, 5), round(v1, 5), round(u0, 5), round(v0, 5), round(u1, 5), round(v0, 5)])
 for x, y in plain: tiles.append([x, y, SLOT_TOP, 0.06, 0.06, 0.14, 0.06, 0.06, 0.14, 0.14, 0.14])
 for k in range(natl):
-    Image.fromarray(atl[k]).quantize(colors=256, method=Image.Quantize.MEDIANCUT, dither=Image.Dither.FLOYDSTEINBERG).save(OUT + "prt_novak%02d.bmp" % (k + 1))
+    Image.fromarray(atl[k]).quantize(colors=256, method=Image.Quantize.MEDIANCUT, dither=Image.Dither.FLOYDSTEINBERG).save(OUT + "prt_novam%02d.bmp" % (k + 1))
 # gat
 gx, gy = np.meshgrid(X0 + (np.arange(2 * NXc) + 0.5) / 2, Y0 + (np.arange(2 * NYc) + 0.5) / 2, indexing="ij")
 gi = np.clip(((gx - X0) * R).astype(int), 0, NX - 1); gj = np.clip(((gy - Y0) * R).astype(int), 0, NY - 1)
