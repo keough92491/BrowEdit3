@@ -12,10 +12,20 @@ GRASS, DIRT, ROCK = 0, 1, 2
 N = 5      # samples per tile edge
 
 
+DESERT = False      # desert sets: GRASS = orange sand (base), DIRT = pale sand (paths), ROCK = grey rock
+
+
 def classify(img):
     a = np.asarray(img.convert("RGB"), dtype=int)
     r, g, b = a[..., 0], a[..., 1], a[..., 2]
     m = np.zeros(r.shape, dtype=np.int8)
+    if DESERT:
+        mx = a.max(-1); mn = a.min(-1)
+        sat = (mx - mn) / np.maximum(mx, 1)
+        rock = (sat < 0.43) & (r < 205)
+        m[rock] = ROCK
+        m[~rock & (r >= 205)] = DIRT
+        return m
     greenish = (g > r + 8) & (g > b + 40)
     mx = np.maximum(np.maximum(r, g), b); mn = np.minimum(np.minimum(r, g), b)
     sat = (mx - mn) / np.maximum(mx, 1)

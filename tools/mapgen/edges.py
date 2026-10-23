@@ -10,9 +10,10 @@ EDGE_U = 0.13          # where the dirt/grass line sits in the texture (dirt for
 
 
 class EdgeField:
-    def __init__(self, field, W1, H1, rng, scale=0.25):
+    def __init__(self, field, W1, H1, rng, scale=0.25, u0=EDGE_U, sgn=-1.0, lo=-0.06, hi=0.85):
         """field: smooth scalar, > 0 in the dirt, 0 on the edge (a distance, so the outline has no cube staircase)"""
         self.scale = scale
+        self.u0, self.sgn, self.lo, self.hi = u0, sgn, lo, hi
         self.Ds = field
         self.contours = extract_contours(self.Ds, min_len=8.0, sigma=1.5)
         self.W1, self.H1 = W1, H1
@@ -72,7 +73,7 @@ class EdgeField:
                 if vs.max() - vs.min() > 0.9:
                     continue
                 vs = vs - np.floor(vs.min())
-                us = EDGE_U - self.scale * dd
-                us = np.clip(us, -0.06, 0.85)         # stay inside the dirt strip: the far border of the texture is at 0.88
+                us = self.u0 + self.sgn * self.scale * dd
+                us = np.clip(us, self.lo, self.hi)         # stay inside the dirt strip: the far border of the texture is at 0.88
                 out[(x, y)] = [(float(us[i]), float(vs[i])) for i in range(4)]
         return out

@@ -17,7 +17,7 @@ def _ss(t):
     return t * t * (3 - 2 * t)
 
 
-def lens_profile(path=None):
+def lens_profile(path=None, desert=False, band=(0.08, 0.92)):
     """(rf, u): how thick the rock of the end piece is (1 = full wall .. 0) along its length u, read from the texture"""
     u = np.linspace(0, 0.95, 96)
     if path is None:
@@ -26,6 +26,9 @@ def lens_profile(path=None):
     a = np.array(Image.open(path).convert("RGB")).astype(float)
     r, g, b = a[..., 0], a[..., 1], a[..., 2]
     grass = (g > r + 8) & (g > b + 40)
+    if desert:
+        sat = (a.max(-1) - a.min(-1)) / np.maximum(a.max(-1), 1)
+        grass = ~((sat < 0.43) & (r < 205))          # "not rock"
     H, W = grass.shape
     top = np.full(W, 0.9)
     for c in range(W):
@@ -34,8 +37,11 @@ def lens_profile(path=None):
             top[c] = ys.min() / H
     top = ndi.gaussian_filter1d(top, 6, mode="nearest")
     top = np.maximum.accumulate(top)
-    vt = np.clip(top - 0.12, 0.08, 0.92)
-    rf = np.clip((0.92 - vt) / 0.84, 0.0, 1.0)
+    if desert:
+        rf = np.clip((band[1] - top) / (band[1] - top[0]), 0.0, 1.0)
+    else:
+        vt = np.clip(top - 0.12, 0.08, 0.92)
+        rf = np.clip((0.92 - vt) / 0.84, 0.0, 1.0)
     rf_u = np.interp(u, np.arange(W) / (W - 1), rf)
     rf_u = np.minimum.accumulate(rf_u)
     return rf_u, u
@@ -139,11 +145,12 @@ def _cdist(ct, a, b):
 class CliffField:
     """Evaluates height / texture coordinates at any set of points (corner grid)."""
 
-    def __init__(self, inside, W1, H1, step=30.0, w=2.6, wr=14.0, rng=None, sigma=3.0, gaps=True, wt=None, kk=0.2, end_tex=None):
+    def __init__(self, inside, W1, H1, step=30.0, w=2.6, wr=14.0, rng=None, sigma=3.0, gaps=True, wt=None, kk=0.2, end_tex=None, desert=False, band=(0.08, 0.92)):
         self.W1, self.H1, self.step, self.w, self.wr = W1, H1, step, w, wr
         self.wt = wt or w
         self.kk = kk
-        self.rf, self.rf_u = lens_profile(end_tex)
+        self.band = band
+        self.rf, self.rf_u = lens_profile(end_tex, desert, band)
         self.rf_ext_u = np.concatenate([self.rf_u, [0.99]])
         self.rf_ext = np.concatenate([self.rf, [0.0]])
         self.rng = rng or np.random.default_rng(0)
@@ -204,7 +211,7 @@ class CliffField:
         self.gd = gd.reshape(shape)
         ue = np.clip(0.95 * (1.0 - (gd - HO) / 4.5), 0.0, 0.99)
         self.ue = ue.reshape(shape)
-        self.v = (0.5 - 0.84 * d / self.wt).reshape(shape)             # raw: <0.08 top lip ... >0.92 bottom lip
+        self.v = ((self.band[0] + self.band[1]) / 2 - (self.band[1] - self.band[0]) * d / self.wt).reshape(shape)             # raw: <0.08 top lip ... >0.92 bottom lip
         u = np.zeros(len(P))
         for i, ct in enumerate(self.contours):
             sel = ci == i
@@ -240,7 +247,7 @@ class CliffField:
                     self.why[(x, y)] = 'excl'
                     continue
                 vr = np.array([self.v[a, b] for a, b in cc])
-                if vr.max() < 0.2 or vr.min() > 0.93:
+                if vr.max() < self.band[0] + 0.12 or vr.min() > self.band[1] + 0.01:
                     continue                      # no rock in this cube
                 clamped = vr.min() < -0.03 or vr.max() > 1.03
                 Ts = np.array([self.T[a, b] for a, b in cc])
