@@ -1,5 +1,5 @@
 """Lower-right ant-nest dungeon, UL-style: smooth cave slopes, black rock ceiling, baked atlases (antflat floor + moss/mine rock).
-Layout traced from the user's 'Ant Nest' guide.  Writes an_h/an_g/an_t json + prt_novam%02d.bmp, preview an_pv.png."""
+Layout traced from the user's 'Ant Nest' guide.  Writes an_h/an_g/an_t json + prt_novan%02d.bmp, preview an_pv.png."""
 import json, os, numpy as np
 from PIL import Image, ImageDraw
 from scipy import ndimage as ndi
@@ -156,9 +156,9 @@ zoneE = ndi.gaussian_filter((np.array(_zi)[::-1].T > 127).astype(float), 0.35 * 
 nzc = nz(0.8); nz1 = nz(0.5); nz2 = nz(0.25); nz3a = nz(2.2); nzf = nz(1.6)
 smooth = S_
 glows = []
-CELL, ATLW, ATLH = 40, 1024, 512
+CELL, ATLW, ATLH, SS = 56, 1008, 952, 2
 PERA, PERY = ATLW // CELL, ATLH // CELL; NC = PERA * PERY
-cs_ = (np.arange(CELL) + 0.5) / CELL
+cs_ = (np.arange(CELL * SS) + 0.5) / (CELL * SS)
 FXc, FYc = np.meshgrid(cs_, 1 - cs_)
 baked, plain = [], []
 for x in range(NXc):
@@ -185,10 +185,12 @@ for n_, (x, y) in enumerate(baked):
     fl = fl * np.array([0.60, 0.56, 0.52])
     for gx_, gy_ in glows:
         gd = np.hypot(wx - gx_, wy - gy_); fl = fl + np.array([150, 80, 25.0]) * np.exp(-(gd / 3.4) ** 2)[..., None]
-    rkA = per_tex(T3, wx, wy, 1.9, 1.3); rkB = per_tex(T7, wx, wy, 2.7, 1.8, 1.3, 0.7)
+    rkA = per_tex(T3, wx, wy, 1.2, 0.8); rkB = per_tex(T7, wx, wy, 1.7, 1.15, 1.3, 0.7)
     mm = smooth(0.5 + 0.55 * fld(nz3a, wx, wy))[..., None]
-    moss = per_tex(F2, wx, wy, 1.4, 1.4, 0.4, 0.9)
+    moss = per_tex(F2, wx, wy, 0.9, 0.9, 0.4, 0.9)
     rk = (rkA * mm + rkB * (1 - mm)) * 0.62 + moss * np.array([0.62, 0.72, 0.45]) * 0.55
+    det = per_tex(T3, wx, wy, 0.5, 0.35, 0.2, 0.1).mean(-1, keepdims=True); det = det / det.mean()
+    rk = rk * np.clip(0.55 + 0.45 * det, 0.5, 1.5)
     cz = fld(nzc, wx, wy); rk = rk * (1 - 0.5 * np.exp(-(cz / 0.16) ** 2))[..., None]          # dark crevices / strata
     rk = rk * (0.8 + 0.35 * smooth(0.5 + 0.5 * fld(nz3a, wx, wy)))[..., None]
     wr = smooth((sd + 0.12 + 0.30 * n1 + 0.10 * n2) / 0.85)
@@ -205,6 +207,7 @@ for n_, (x, y) in enumerate(baked):
     col = col * (1 - wg[..., None]) + outc * wg[..., None]
     wcv = 1 - smooth((-se - 0.2 + 0.3 * n1) / 2.6)
     col = col * wcv[..., None] + outc * (1 - wcv[..., None])
+    col = col.reshape(CELL, SS, CELL, SS, 3).mean((1, 3))
     c8 = np.clip(col, 0, 255).astype(np.uint8); cells["%d_%d" % (x, y)] = c8
     k, c = divmod(n_, NC); cy_, cx_ = divmod(c, PERA)
     atl[k][cy_ * CELL:(cy_ + 1) * CELL, cx_ * CELL:(cx_ + 1) * CELL] = c8
@@ -214,7 +217,7 @@ for n_, (x, y) in enumerate(baked):
     tiles.append([x, y, SLOT_ATL0 + k, round(u0, 5), round(v1, 5), round(u1, 5), round(v1, 5), round(u0, 5), round(v0, 5), round(u1, 5), round(v0, 5)])
 for x, y in plain: tiles.append([x, y, SLOT_TOP, 0.06, 0.06, 0.14, 0.06, 0.06, 0.14, 0.14, 0.14])
 for k in range(natl):
-    Image.fromarray(atl[k]).quantize(colors=256, method=Image.Quantize.MEDIANCUT, dither=Image.Dither.FLOYDSTEINBERG).save(OUT + "prt_novam%02d.bmp" % (k + 1))
+    Image.fromarray(atl[k]).quantize(colors=256, method=Image.Quantize.MEDIANCUT, dither=Image.Dither.FLOYDSTEINBERG).save(OUT + "prt_novan%02d.bmp" % (k + 1))
 # gat
 gx, gy = np.meshgrid(X0 + (np.arange(2 * NXc) + 0.5) / 2, Y0 + (np.arange(2 * NYc) + 0.5) / 2, indexing="ij")
 gi = np.clip(((gx - X0) * R).astype(int), 0, NX - 1); gj = np.clip(((gy - Y0) * R).astype(int), 0, NY - 1)
