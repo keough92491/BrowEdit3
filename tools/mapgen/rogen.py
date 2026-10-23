@@ -84,6 +84,7 @@ class MapGen:
         self.water_level = None         # world units, positive = up
         self.water_params = dict(type=0, amplitude=1.0, wave_speed=2.0, wave_pitch=50.0, anim_speed=3)
         self.sun = dict(longitude=45, latitude=45, diffuse=(1.0, 1.0, 1.0), ambient=(0.8, 0.8, 0.8), intensity=0.5)
+        self.corner_path = np.zeros((W + 1, H + 1), dtype=bool)   # cube corners on a path
         self.cube_uv = {}               # (x,y) -> (texture index, 4 (s,t) corner uvs) overrides, live link only
         self.models = []
         self.lights = []
@@ -202,6 +203,7 @@ class MapGen:
         self.base = self.base * (1 - w) + blurred * w
         cx, cy = np.meshgrid(np.arange(self.width) + 0.5, np.arange(self.height) + 0.5, indexing="ij")
         dc = self._dist_to_polyline(points, cx, cy)
+        self.corner_path |= d <= width / 2.0
         mask = dc <= width / 2.0
         self.masks["path"] = np.maximum(self.masks["path"], mask.astype(float))
         if texture is not None:

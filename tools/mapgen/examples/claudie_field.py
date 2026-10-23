@@ -27,8 +27,8 @@ for i, x in enumerate(range(14, 100, 14)):
     main.append((x, 50 + 16 * np.sin(i * 1.3 + 0.7) + rng.uniform(-4, 4)))
 branch = [main[2], (36, 28), (42, 12), (58, 4)]
 for _ in range(3):
-    m.path(main, width=3.4, flatten=0.9)
-    m.path(branch, width=2.6, flatten=0.9)
+    m.path(main, width=3.8, flatten=0.9)
+    m.path(branch, width=3.0, flatten=0.9)
 m.smooth(1)
 
 # ---- lake on the lowest terrace, so one water level does not flood the rest
@@ -56,48 +56,108 @@ m.paint_all(GRASS)
 wm = m.masks["water"] > 0.5
 ring = wm.copy()
 ring[1:, :] |= wm[:-1, :]; ring[:-1, :] |= wm[1:, :]; ring[:, 1:] |= wm[:, :-1]; ring[:, :-1] |= wm[:, 1:]
-dirt_mask = (m.masks["path"] > 0.5) | ring
-dirt = m.autotile_dirt(dirt_mask, DIRT, EDGE, BLOB)
-m.autotile_cliffs(CLIFF, min_slope=0.45, skip_mask=dirt)
-
-# ---- forest clumps and meadows
-fn = m._value_noise(13, np.random.default_rng(9))[:W, :H]
-m.masks["forest"] = (fn > 0.52).astype(float)
-m.masks["meadow"] = 1.0 - m.masks["forest"]
-sl = m.slope_map()
-cl = (sl > 0.3)
-cliffnear = cl.copy()
+dirt_cubes = (m.masks["path"] > 0.5) | ring
+m.masks["dirt"] = dirt_cubes.astype(float)
+# material wanted at every cube corner: 0 grass, 1 dirt, 2 rock
+mat = np.zeros((W + 1, H + 1), dtype=int)
+b = m.base
+steep = np.zeros_like(b, dtype=bool)
+for dx, dy in ((1, 0), (-1, 0), (0, 1), (0, -1)):
+    sh = np.roll(np.roll(b, dx, 0), dy, 1)
+    steep |= np.abs(b - sh) > 5.0
+steep[0, :] = steep[-1, :] = steep[:, 0] = steep[:, -1] = False
+shore = np.zeros_like(steep)
+rc = np.pad(ring, 1)
+for dx in (0, 1):
+    for dy in (0, 1):
+        shore |= np.pad(rc[dx:dx + W, dy:dy + H], ((0, 1), (0, 1)))[: W + 1, : H + 1] if False else False
+cw = np.pad(ring, ((1, 1), (1, 1)))          # corner (x,y) touches cubes (x-1..x, y-1..y)
+shore = cw[:-1, :-1] | cw[1:, :-1] | cw[:-1, 1:] | cw[1:, 1:]
+dirt_c = m.corner_path | shore
+near = dirt_c.copy()
 for _ in range(2):
-    cliffnear[1:, :] |= cl[:-1, :]; cliffnear[:-1, :] |= cl[1:, :]; cliffnear[:, 1:] |= cl[:, :-1]; cliffnear[:, :-1] |= cl[:, 1:]
-m.masks["cliffnear"] = cliffnear.astype(float)
-av = ("water", "path", "dirt")
-m.scatter(["roo_payon\\pine3.rsm", "roo_fild\\tree.rsm"], 240, region=(3, 3, 97, 97), min_dist=3.2, footprint=(0.8, 0.8),
-          avoid=av, max_slope=0.4, mask="forest", scale_range=(1.0, 1.7), weights=[3, 2])
-m.scatter(["roo_fild\\tree.rsm", "roo_payon\\pine3.rsm"], 22, region=(3, 3, 97, 97), min_dist=10, footprint=(0.8, 0.8),
-          avoid=av, max_slope=0.4, mask="meadow", scale_range=(1.2, 2.0))
-m.scatter(["ROO_fild\\rock4.rsm"], 30, region=(3, 3, 97, 97), min_dist=5, footprint=(1.2, 1.2), avoid=av, max_slope=1.5,
-          mask="cliffnear", scale_range=(0.9, 1.8))
-m.scatter(["roo_fild\\bush1.rsm"], 45, region=(3, 3, 97, 97), min_dist=4, footprint=(1.0, 1.0), avoid=av, max_slope=0.4,
-          scale_range=(2.4, 3.7))
-# flower clumps (no GAT)
-made = 0
-while made < 22:
-    u, v = rng.uniform(5, 95), rng.uniform(5, 95)
+    nn = near.copy()
+    for dx, dy in ((1, 0), (-1, 0), (0, 1), (0, -1), (1, 1), (-1, -1), (1, -1), (-1, 1)):
+        nn |= np.roll(np.roll(near, dx, 0), dy, 1)
+    near = nn
+mat[steep & ~near] = 2
+mat[dirt_c] = 1
+from tilelib import TileLib, render
+TEX = {0: "ÃÊ¿ø01", 1: "¾ð´ö01", 2: "ÃÊ¿ø02", 3: "Èë02", 4: "¾ð´ö03", 5: "¾ð´ö02", 6: "ÃÊ¿ø04", 7: "¾ð´ö10", 8: "¾ð´ö11", 9: "ÃÊ¿ø09"}
+TEXDIR = os.environ.get("TEXDIR", "/mnt/user-data/uploads/ROO_MAP/data/texture/roo_prtf/")
+tex_paths = {i: TEXDIR + "prt_%s.bmp" % n for i, n in TEX.items()}
+lib = TileLib(tex_paths)
+for t in TEX:
+    m.add_texture("#%d" % t)
+sel = lib.solve(mat, np.random.default_rng(4))
+for (x, y), (ti, uv) in sel.items():
+    m.cube_uv[(x, y)] = (m.add_texture("#%d" % ti), uv)
+dirt = dirt_cubes
+if os.environ.get("PREVIEW"):
+    render(m, tex_paths, 0, 0, W, H, os.environ["PREVIEW"], S=8)
+
+# ---- model placement the way prt_fild00 does it: fixed scales, small clusters, a few dense stands
+TREE, PINE, BUSH, ROCK = "roo_fild\\tree.rsm", "roo_payon\\pine3.rsm", "roo_fild\\bush1.rsm", "ROO_fild\\rock4.rsm"
+sl = m.slope_map()
+m._update_water_mask(); m._slope = sl
+placed_xy = []
+
+def ok(u, v, slope=0.4, gap=2.2):
+    if not (3 < u < W - 3 and 3 < v < H - 3):
+        return False
     x, y = int(u), int(v)
-    if m.masks["meadow"][x, y] < 0.5 or any(m.masks[k][x, y] > 0.5 for k in av) or sl[x, y] > 0.3:
-        continue
-    for _ in range(int(rng.integers(4, 8))):
-        du, dv = u + rng.uniform(-2, 2), v + rng.uniform(-2, 2)
-        if not (0 < du < W - 1 and 0 < dv < H - 1) or any(m.masks[k][int(du), int(dv)] > 0.5 for k in av):
-            continue
-        sc = rng.uniform(0.4, 0.6)
-        mm = m.place("roo_prtfild\\b1.rsm", du, dv, rot=(0, float(rng.uniform(0, 360)), 0), scale=(sc, sc, sc * 1.15))
-        mm.nogat = True
-    made += 1
+    if any(m.masks[k][x, y] > 0.5 for k in ("water", "path", "dirt")) or sl[x, y] > slope or mat[x, y] == 2 or mat[x + 1, y + 1] == 2:
+        return False
+    return all((u - pu) ** 2 + (v - pv) ** 2 >= gap * gap for pu, pv in placed_xy)
+
+def put(file, u, v, scale):
+    m.place(file, u, v, rot=(0, float(rng.uniform(0, 360)), 0), scale=scale, footprint=(0.8, 0.8))
+    placed_xy.append((u, v))
+
+def cluster(files, weights, n, radius, scale_of, cu=None, cv=None, gap=2.2):
+    for _ in range(40):
+        c_u = cu if cu is not None else rng.uniform(6, W - 6)
+        c_v = cv if cv is not None else rng.uniform(6, H - 6)
+        if ok(c_u, c_v):
+            break
+    else:
+        return 0
+    made = 0
+    for _ in range(n * 6):
+        if made >= n:
+            break
+        u, v = rng.normal(c_u, radius), rng.normal(c_v, radius)
+        if ok(u, v, gap=gap):
+            f = files[int(rng.choice(len(files), p=np.array(weights) / sum(weights)))]
+            put(f, u, v, scale_of[f])
+            made += 1
+    return made
+
+SC = {TREE: (1.95,) * 3, PINE: (1.42,) * 3, BUSH: (3.65,) * 3, ROCK: (1.04,) * 3}
+# two dense stands (pines mostly) and many small groups
+for _ in range(2):
+    cluster([PINE, TREE], [5, 1], 26, 5.5, SC, gap=2.6)
+for _ in range(16):
+    cluster([TREE, PINE], [3, 2], int(rng.integers(4, 9)), 2.6, SC)
+# single trees in the meadows
+for _ in range(34):
+    cluster([TREE, PINE], [3, 2], 1, 0.1, SC, gap=6)
+# bushes in twos and threes, rocks along the cliff rims
+for _ in range(10):
+    cluster([BUSH], [1], int(rng.integers(1, 4)), 1.6, SC, gap=2.5)
+rim = np.argwhere(mat == 2)
+for _ in range(16):
+    if len(rim):
+        cx, cy = rim[int(rng.integers(len(rim)))]
+        for _ in range(8):
+            u, v = cx + rng.uniform(-3, 3), cy + rng.uniform(-3, 3)
+            if ok(u, v, slope=1.5, gap=3):
+                put(ROCK, u, v, SC[ROCK]); break
 m.set_sun(longitude=40, latitude=50, ambient=(0.7, 0.7, 0.7))
 
 cmds = m.live_commands()
 cmds.insert(1, {"cmd": "delete_models", "filter": ""})
+cmds.append({"cmd": "save"})
 out = sys.argv[1] if len(sys.argv) > 1 else "/mnt/user-data/outputs/c005.json"
 json.dump({"commands": cmds}, open(out, "w"), separators=(",", ":"))
 print(len(m.models), "models,", int(dirt.sum()), "dirt cubes,", len(m.cube_uv), "tile overrides, lake", round(lu), round(lv))
