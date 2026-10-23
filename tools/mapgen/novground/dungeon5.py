@@ -185,7 +185,7 @@ for x in range(W):
             baked.append((x, y))
 natl = (len(baked) + NC - 1) // NC
 atl = [np.zeros((ATLH, ATLW, 3), np.uint8) for _ in range(natl)]
-T0 = 24                                              # first atlas texture index (after the 24 existing ones)
+T0 = 36                                              # first atlas texture index (after the 24 existing ones)
 tiles = []
 for n_, (x, y) in enumerate(baked):
     wx = x + FXc; wy = y + FYc
@@ -232,7 +232,7 @@ for x, y, kind in plain:
         tiles.append([x, y, T03, 0.06, 0.06, 0.14, 0.06, 0.06, 0.14, 0.14, 0.14])
 for k in range(natl):
     im = atl[k]
-    Image.fromarray(im).quantize(colors=256, method=Image.Quantize.MEDIANCUT, dither=Image.Dither.FLOYDSTEINBERG).save(OUT + "prt_novdun%02d.bmp" % (k + 1))
+    Image.fromarray(im).quantize(colors=256, method=Image.Quantize.MEDIANCUT, dither=Image.Dither.FLOYDSTEINBERG).save(OUT + "prt_novdb%02d.bmp" % (k + 1))
     Image.fromarray(im).save(SCR + "novdun%02d.png" % (k + 1))
 tilecmd = {"cmd": "tiles", "list": tiles}
 print("baked", len(baked), "plain", len(plain), "atlases", natl)
