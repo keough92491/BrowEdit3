@@ -19,6 +19,7 @@ lvl = np.floor(z)
 frac = z - lvl
 FT = np.clip((frac - 0.5) / 0.2 + 0.5, 0, 1)      # 0..1 position inside one terrace step
 FT0 = FT.copy()
+FTU = (frac - 0.5) / 0.2 + 0.5                       # not clipped: -0.5..1.5 is the cliff face including its grass lips
 STEP = 30.0
 m.base = STEP * (lvl + _smoothstep((frac - 0.5) / 0.2 + 0.5))
 m.noise(scale=7, amplitude=1.2, octaves=2, seed=3)          # a little roughness on the plateaus
@@ -89,10 +90,6 @@ for t in TEX:
     m.add_texture("#%d" % t)
 # ---- cliff faces: ONE continuous uv field (shared corners get the same uv), t across the step, s along the contour
 slope_c = m.slope_map()
-gx_, gy_ = np.gradient(FT0)
-gx_ = np.gradient(np.pad(FT0, 1, mode="edge"))[0][1:-1, 1:-1] if False else gx_
-tang = np.arctan2(gx_, -gy_)                     # direction along the contour
-tang = np.arctan2(*[np.convolve(np.ones(1), [1]) for _ in range(0)]) if False else tang
 rock = {}
 CL = m.add_texture("#1")
 nearp = m.corner_path.copy()
@@ -101,25 +98,31 @@ for _ in range(2):
     for dx, dy in ((1, 0), (-1, 0), (0, 1), (0, -1), (1, 1), (-1, -1), (1, -1), (-1, 1)):
         nn |= np.roll(np.roll(nearp, dx, 0), dy, 1)
     nearp = nn
+T = np.clip(1.0 - (FTU + 0.5) / 2.0, 0.0, 1.0)          # v across the face, 0 = top lip (high side), 1 = bottom lip
+hb = m.base
 for x in range(W):
     for y in range(H):
         cc = [(x, y), (x + 1, y), (x, y + 1), (x + 1, y + 1)]
-        f = [FT0[a, b] for a, b in cc]
-        if slope_c[x, y] < 0.3 or not (0 < max(f) and min(f) < 1) or max(f) - min(f) < 0.02:
+        tv = [T[a_, b_] for a_, b_ in cc]
+        if min(tv) >= 0.93 or max(tv) <= 0.07 or max(tv) - min(tv) < 0.1:
             continue
-        if any(nearp[a, b] for a, b in cc) or any(shore[a, b] for a, b in cc):
+        if any(nearp[a_, b_] for a_, b_ in cc) or any(shore[a_, b_] for a_, b_ in cc):
             continue
         rock[(x, y)] = cc
+# which way does each cliff run? (prt_fild00 maps one quarter of the texture per cube along the cliff)
+def axis_of(x, y):
+    c = [hb[x, y], hb[x + 1, y], hb[x, y + 1], hb[x + 1, y + 1]]
+    gx = abs((c[1] + c[3]) - (c[0] + c[2]))
+    gy = abs((c[2] + c[3]) - (c[0] + c[1]))
+    return gx >= gy                                       # True: slope across x, the cliff runs along y
 fixed = set(rock)
 for (x, y), cc in rock.items():
+    along_y = axis_of(x, y)
     uv = []
-    for a, b in cc:
-        t_ = 0.04 + 0.92 * (1.0 - FT0[a, b])
-        ang = tang[a, b]
-        s_ = 0.25 * (a * np.cos(ang) + b * np.sin(ang))
-        uv.append((s_, t_))
-    base_s = np.floor(min(u for u, _ in uv))
-    uv = [(u - base_s, t_) for u, t_ in uv]
+    for (a_, b_) in cc:
+        px, py = a_ - x, b_ - y
+        s_ = (((y % 4) + py) if along_y else ((x % 4) + px)) * 0.25
+        uv.append((s_, float(T[a_, b_])))
     m.cube_uv[(x, y)] = (CL, uv)
 sel = lib.solve(mat, np.random.default_rng(4), fixed=fixed)
 for (x, y), (ti, uv) in sel.items():
