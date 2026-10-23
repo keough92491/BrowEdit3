@@ -172,7 +172,7 @@ for x in range(NXc):
         ses = [SEc[x, y], SEc[x + 1, y], SEc[x, y + 1], SEc[x + 1, y + 1]]
         sds = [SDc[x, y], SDc[x + 1, y], SDc[x, y + 1], SDc[x + 1, y + 1]]
         dbs = [dBc[x, y], dBc[x + 1, y], dBc[x, y + 1], dBc[x + 1, y + 1]]
-        fl_out = (not inblk[x, y]) and min(sds) < 0.5 and min(ses) > -9 and max(ses) < 0.3 and min(sds) < 0.5 and floor_w.reshape(NXc, R, NYc, R)[x, :, y, :].any()
+        fl_out = (not inblk[x, y]) and floor_w.reshape(NXc, R, NYc, R)[x, :, y, :].any()
         ext = ((not inblk[x, y]) and min(ses) > -2.6 and max(ses) < 0.3) or fl_out
         if not (inblk[x, y] or ext): continue
         if not ext and min(sds) >= SLOPE + 0.5 and min(dbs) >= SLOPE_B + 0.5: plain.append((ax, ay, "top"))

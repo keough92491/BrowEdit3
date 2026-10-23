@@ -52,7 +52,7 @@ cubechg = chg[:-1, :-1] | chg[1:, :-1] | chg[:-1, 1:] | chg[1:, 1:]
 cubechg = ndi.binary_dilation(cubechg, np.ones((3, 3), bool))
 mn = np.minimum.reduce([f2[:-1, :-1], f2[1:, :-1], f2[:-1, 1:], f2[1:, 1:]]); mx = np.maximum.reduce([f2[:-1, :-1], f2[1:, :-1], f2[:-1, 1:], f2[1:, 1:]])
 zone = (mn < 0.7) & (mx > -0.7)
-ul = {(e[0], e[1]) for e in json.load(open(OUT + "ue6_tiles.json"))["commands"][0]["list"]}
+ul = {(e[0], e[1]) for e in json.load(open(OUT + "ue12_tiles.json"))["commands"][0]["list"]}
 def samp(T, tu, tv):
     h, w = T.shape[:2]; fx = (tu % 1.0) * w - 0.5; fy = (tv % 1.0) * h - 0.5
     x0 = np.floor(fx).astype(int); y0 = np.floor(fy).astype(int); ax = (fx - x0)[..., None]; ay = (fy - y0)[..., None]
@@ -67,12 +67,16 @@ def fld(a, wx_, wy_, q=1): return ndi.map_coordinates(a, [wx_ * q, wy_ * q], ord
 CELL, AW, AH = 56, 1024, 768
 PA, PY = AW // CELL, AH // CELL; NC = PA * PY
 cs = (np.arange(CELL) + 0.5) / CELL; FX, FY = np.meshgrid(cs, 1 - cs)
-cubes = [(x, y) for x in range(200) for y in range(200) if cubechg[x, y] and (x, y) not in ul]
-bake = [(x, y) for x, y in cubes if zone[x, y]]
+cl15 = {(e[0], e[1]): e for e in [c for c in json.load(open(OUT + "cl15.json"))["commands"] if c["cmd"] == "tiles"][0]["list"]}
+rock = {k for k, e in cl15.items() if e[2] in (15, 18)}
+cells = np.load(SCR + "cells_new2.npz")
+mixed = [(x, y) for x in range(200) for y in range(200) if cubechg[x, y] and (x, y) in ul and "%d_%d" % (x, y) in cells.files and x >= 82]
+cubes = [(x, y) for x in range(200) for y in range(200) if cubechg[x, y] and (x, y) not in ul and (x, y) not in rock]
+bake = [(x, y) for x, y in cubes if zone[x, y]] + [p for p in mixed if zone[p]]
 plain = [(x, y) for x, y in cubes if not zone[x, y]]
 atl = [np.zeros((AH, AW, 3), np.uint8) for _ in range((len(bake) + NC - 1) // NC)]
 tiles = []
-RSLOT = 50
+RSLOT = 53
 for n, (x, y) in enumerate(bake):
     wx_ = x + FX; wy_ = y + FY
     sdv = fld(f2, wx_, wy_)
@@ -81,6 +85,9 @@ for n, (x, y) in enumerate(bake):
     i4, j4 = x % 4, y % 4
     gr = samp(T_GRASS, (i4 + FX) / 4, 1 - (j4 + FY) / 4); dt = samp(T_DIRT, (i4 + FX) / 4, 1 - (j4 + FY) / 4)
     col = gr * (1 - wd) + dt * wd
+    if (x, y) in set(mixed):
+        base = np.asarray(Image.fromarray(cells["%d_%d" % (x, y)]).resize((CELL, CELL), Image.BILINEAR), np.float32)
+        col = base * (1 - wd) + dt * wd
     k, c = divmod(n, NC); cy_, cx_ = divmod(c, PA)
     atl[k][cy_ * CELL:(cy_ + 1) * CELL, cx_ * CELL:(cx_ + 1) * CELL] = np.clip(col, 0, 255).astype(np.uint8)
     eu, ev = 0.5 / AW, 0.5 / AH
@@ -90,9 +97,12 @@ for x, y in plain:
     dirt = f2[x:x + 2, y:y + 2].mean() > 0
     pts = [(((x % 4) + dx) / 4, 1 - ((y % 4) + dy) / 4) for dx, dy in [(0, 0), (1, 0), (0, 1), (1, 1)]]
     tiles.append([x, y, 2 if dirt else 0] + [round(float(q), 5) for p in pts for q in p])
+RM = {15: 7, 18: 8}
+for k_, e in cl15.items():
+    if e[2] in RM and 76 <= k_[0] <= 110 and 150 <= k_[1] <= 166: tiles.append([e[0], e[1], RM[e[2]]] + list(e[3:]))
 for k, im in enumerate(atl):
-    Image.fromarray(im).quantize(colors=256, method=Image.Quantize.MEDIANCUT, dither=Image.Dither.FLOYDSTEINBERG).save(OUT + "prt_novrg%02d.bmp" % (k + 1))
-json.dump({"commands": [{"cmd": "tiles", "list": tiles}]}, open(OUT + "ue7_tiles.json", "w"), separators=(",", ":"))
+    Image.fromarray(im).quantize(colors=256, method=Image.Quantize.MEDIANCUT, dither=Image.Dither.FLOYDSTEINBERG).save(OUT + "prt_novri%02d.bmp" % (k + 1))
+json.dump({"commands": [{"cmd": "tiles", "list": tiles}]}, open(OUT + "ue13_tiles.json", "w"), separators=(",", ":"))
 print("cubes", len(cubes), "baked", len(bake), "plain", len(plain), "atlases", len(atl))
 # preview
 x0, x1, y0, y1, S = 60, 115, 118, 164, 12
