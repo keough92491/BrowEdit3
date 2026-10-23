@@ -3,6 +3,7 @@ import sys, os, json
 import numpy as np
 from scipy import ndimage as ndi
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
+import tilelib
 from tilelib import TileLib
 from edges import EdgeField
 from PIL import Image
@@ -49,7 +50,7 @@ for name, pts in ROADS.items():
     ramp = np.clip(np.hypot(q[:, 0] - CAMP[0], q[:, 1] - CAMP[1]) / 14.0 - 0.7, 0, 1)
     q = q + nrm * (off * ramp)[:, None]
     q = smooth(q, 6)
-    w0 = 3.7 if name in ("north", "west", "east", "south") else 3.0
+    w0 = 5.2 if name in ("north", "west", "east", "south") else 4.0
     wid = w0 * (1.0 + noise1(n, 40, rng) * 0.8 + noise1(n, 12, rng) * 0.35)
     wid = np.clip(wid, w0 * 0.65, w0 * 1.5)
     centre_lines.append((q, wid))
@@ -65,16 +66,22 @@ for q, wid in centre_lines:
         d = np.hypot(cx - px_, cy - py_); field = np.maximum(field, r - d + 0.3)
 # irregular plaza
 ang = np.arctan2(cy - CAMP[1], cx - CAMP[0])
-rad = 11.0 + 1.6 * np.sin(3 * ang + 0.7) + 1.1 * np.sin(5 * ang + 2.0) + 0.7 * np.sin(8 * ang)
+rad = 14.5 + 1.8 * np.sin(3 * ang + 0.7) + 1.1 * np.sin(5 * ang + 2.0) + 0.7 * np.sin(8 * ang)
 field = np.maximum(field, rad - np.hypot(cx - CAMP[0], cy - CAMP[1]))
 field = ndi.gaussian_filter(field, 0.7)
 EF = EdgeField(field, Wc, Hc, np.random.default_rng(11))
 mat = np.zeros((Wc, Hc), int); mat[EF.dd > 0] = 1
 
-td = "/mnt/user-data/uploads/ROO_MAP/data/texture/roo_prtf/"
+def classify_hd(img):        # the HD client textures: olive grass (r<g) vs golden dirt (r>>g)
+    a = np.asarray(img.convert("RGB"), dtype=int)
+    d = ndi.gaussian_filter((a[..., 0] - a[..., 1]).astype(float), 2.5, mode="wrap")
+    return (d > 13).astype(np.int8)
+tilelib.classify = classify_hd
+td = "/mnt/user-data/uploads/texture/ÇÊµå¹Ù´Ú/"
+PLAIN_DIRT = "/mnt/user-data/uploads/ROO_MAP/data/texture/roo_prtf/prt_Èë03.bmp"
 names = {0: "prt_ÃÊ¿ø01.bmp", 1: "prt_ÃÊ¿ø02.bmp", 2: "prt_ÃÊ¿ø03.bmp", 3: "prt_ÃÊ¿ø04.bmp", 4: "prt_ÃÊ¿ø05.bmp"}
-lib = TileLib({i: td + n for i, n in names.items()}, plain={0: 0})
-sel = lib.solve(mat, np.random.default_rng(4), fixed=set(), noise=float(os.environ.get("NOISE", 0.6)))
+lib = TileLib({**{i: td + n for i, n in names.items()}, 5: PLAIN_DIRT}, plain={0: 0, 1: 5})
+sel = lib.solve(mat, np.random.default_rng(4), fixed=set(), noise=float(os.environ.get("NOISE", 0.2)))
 edgeuv = EF.edge_cubes((0, W), (0, H), skip=set())
 tiles, used = [], {}
 cube_uv = {}
@@ -91,6 +98,7 @@ pv = np.zeros((W, H, 3), np.uint8); pv[:] = (110, 170, 50); pv[mat[:W, :H] == 1]
 Image.fromarray(pv.transpose(1, 0, 2)[::-1]).resize((600, 600), Image.NEAREST).save(SCR + "ng_pv.png")
 S = 10
 tex = {i: np.asarray(Image.open(td + n).convert("RGB").resize((128, 128))) for i, n in names.items()}
+tex[5] = np.asarray(Image.open(PLAIN_DIRT).convert("RGB").resize((128, 128)))
 def render(x0, y0, w, h, out):
     img = np.zeros((h * S, w * S, 3), np.uint8)
     a = (np.arange(S) + 0.5) / S; fa, fb = np.meshgrid(a, a)
