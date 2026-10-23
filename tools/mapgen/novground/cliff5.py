@@ -67,3 +67,12 @@ Image.fromarray(pv[::-1]).resize(((X1 - X0) * 8, (Y1 - Y0) * 8), Image.NEAREST).
 
 from collections import Counter
 print(Counter(v.split()[0] for v in CF.why.values()))
+print("---- near gap")
+for y in range(157, 168):
+    row = ""
+    for x in range(84, 120):
+        k = rock.get((x, y))
+        w = CF.why.get((x, y), "")
+        row += ("B" if k and k[0] == "body" else "E" if k else ("t" if w == "tip" else "s" if w.startswith("str") else "."))
+    print(y, row)
+print("T along contour near gap:", [round(float(CF.T[x, 162]), 2) for x in range(90, 114, 2)])
