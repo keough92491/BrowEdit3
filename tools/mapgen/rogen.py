@@ -84,6 +84,7 @@ class MapGen:
         self.water_level = None         # world units, positive = up
         self.water_params = dict(type=0, amplitude=1.0, wave_speed=2.0, wave_pitch=50.0, anim_speed=3)
         self.sun = dict(longitude=45, latitude=45, diffuse=(1.0, 1.0, 1.0), ambient=(0.8, 0.8, 0.8), intensity=0.5)
+        self.cube_uv = {}               # (x,y) -> (texture index, 4 (s,t) corner uvs) overrides, live link only
         self.models = []
         self.lights = []
         self.sounds = []
@@ -265,6 +266,75 @@ class MapGen:
             for y in range(H):
                 h[x, y] = sum(self._cube_corners(x, y)) / 4.0
         return h
+
+    # ------------------------------------------------------------------ tile level texturing (live link)
+    def set_tile(self, x, y, texture, corner_uv):
+        """Own tile for one cube. corner_uv = [(s,t)] for corners h1 (x,y), h2 (x+1,y), h3 (x,y+1), h4 (x+1,y+1).
+        A normal ground tile is [(0,1),(1,1),(0,0),(1,0)]."""
+        self.cube_uv[(int(x), int(y))] = (int(texture), [tuple(map(float, c)) for c in corner_uv])
+
+    def autotile_dirt(self, mask, dirt, edge, blob, fringe=0.5):
+        """Seamless dirt paths with transition tiles: dirt = a full dirt texture, edge = a tile with a dirt strip on
+        its left side (grass elsewhere), blob = an isolated dirt patch. mask = bool array (W,H) of dirt cubes."""
+        W, H = self.width, self.height
+        d = np.array(mask, dtype=bool)
+        for _ in range(3):      # remove concave corners and 1 wide gaps so every grass cube touches dirt on one side at most
+            n = np.zeros((W, H), dtype=int)
+            n[1:, :] += d[:-1, :]; n[:-1, :] += d[1:, :]; n[:, 1:] += d[:, :-1]; n[:, :-1] += d[:, 1:]
+            d = d | (n >= 2)
+        self.masks["dirt"] = d.astype(float)
+        full = [(0, 1), (1, 1), (0, 0), (1, 0)]
+        corners = [(0, 0), (1, 0), (0, 1), (1, 1)]          # (px, py) of h1..h4
+        for x in range(W):
+            for y in range(H):
+                nb = {k: (0 <= x + dx < W and 0 <= y + dy < H and d[x + dx, y + dy])
+                      for k, (dx, dy) in dict(W=(-1, 0), E=(1, 0), N=(0, -1), S=(0, 1)).items()}
+                cnt = sum(nb.values())
+                if d[x, y]:
+                    if cnt == 0:
+                        self.set_tile(x, y, blob, full)
+                    else:
+                        self.set_tile(x, y, dirt, full)
+                elif cnt == 1:
+                    k = [k for k, v in nb.items() if v][0]
+                    uv = []
+                    for px, py in corners:
+                        if k == "W": s_, t_ = px * fringe, 1 - py
+                        elif k == "E": s_, t_ = (1 - px) * fringe, 1 - py
+                        elif k == "N": s_, t_ = py * fringe, px
+                        else: s_, t_ = (1 - py) * fringe, px
+                        uv.append((s_, t_))
+                    self.set_tile(x, y, edge, uv)
+        return d
+
+    def autotile_cliffs(self, cliff, min_slope=0.55, skip_mask=None):
+        """Steep ground gets a cliff face texture (grass on top, rock below) turned to face downhill."""
+        W, H = self.width, self.height
+        hm = self.cube_height_map()
+        slope = self.slope_map()
+        corners = [(0, 0), (1, 0), (0, 1), (1, 1)]
+        count = 0
+        for x in range(W):
+            for y in range(H):
+                if slope[x, y] < min_slope or (skip_mask is not None and skip_mask[x, y]):
+                    continue
+                c = self._cube_corners(x, y)       # h1 (x,y) h2 (x+1,y) h3 (x,y+1) h4 (x+1,y+1), up positive
+                gx_ = (c[1] + c[3]) - (c[0] + c[2])     # > 0: east is higher
+                gy_ = (c[2] + c[3]) - (c[0] + c[1])     # > 0: south is higher
+                uv = []
+                for px, py in corners:
+                    if abs(gx_) >= abs(gy_):
+                        hi = 0 if gx_ < 0 else 1                  # px of the high side
+                        t_ = 0.0 if px == hi else 1.0
+                        s_ = float(py)
+                    else:
+                        hi = 0 if gy_ < 0 else 1
+                        t_ = 0.0 if py == hi else 1.0
+                        s_ = float(px)
+                    uv.append((s_, t_))
+                self.set_tile(x, y, cliff, uv)
+                count += 1
+        return count
 
     # ------------------------------------------------------------------ water
     def water(self, level, type=0, amplitude=1.0, wave_speed=2.0, wave_pitch=50.0, anim_speed=3):
@@ -800,19 +870,30 @@ class MapGen:
                         x += 1
             if rows:
                 cmds.append({"cmd": "paint", "texture": f, "rows": rows})
+        if self.cube_uv:
+            lst = []
+            for (x, y), (ti, uv) in sorted(self.cube_uv.items()):
+                ref = self.textures[ti][0]
+                if not ref.startswith("#"):
+                    raise ValueError("tile textures must be given as '#index' of the open map's texture list")
+                lst.append([x, y, int(ref[1:])] + [round(c, 4) for (a, b) in uv for c in (a, b)])
+            cmds.append({"cmd": "tiles", "list": lst})
         # terrain gat (cliffs, water), models follow with their exact footprint
         rows = []
         for gy in range(H * 2):
             rows.extend(r for r in self._runs([types[gx, gy] for gx in range(W * 2)], gy) if r[3] != 0)
         if rows:
             cmds.append({"cmd": "gat", "rows": rows})
-        for i in range(0, len(self.models), models_per_command):
+        groups = [(True, [m for m in self.models if not getattr(m, "nogat", False)]),
+                  (False, [m for m in self.models if getattr(m, "nogat", False)])]
+        chunks = [(flag, lst[i:i + models_per_command]) for flag, lst in groups for i in range(0, len(lst), models_per_command)]
+        for flag, chunk in chunks:
             items = []
-            for m in self.models[i:i + models_per_command]:
+            for m in chunk:
                 up = self.height_at(m.u, m.v) + m.height_offset if m.ground else m.height_offset
                 items.append({"file": m.file, "name": m.name, "pos": [round(c, 3) for c in self._rsw_pos(m.u, m.v, up)],
                               "rot": list(m.rot), "scale": list(m.scale)})
-            cmds.append({"cmd": "models", "items": items, "smart_gat": bool(smart_gat)})
+            cmds.append({"cmd": "models", "items": items, "smart_gat": bool(smart_gat and flag)})
         return cmds
 
     def save_live(self, path, **kw):
