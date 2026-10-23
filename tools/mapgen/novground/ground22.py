@@ -190,9 +190,9 @@ for n_, (x, y) in enumerate(RIM):
     r = np.hypot(wx - CAMP[0], wy - CAMP[1])
     # irregular, broken-up edges (world-continuous noise, so neighbouring cells match)
     ro = R2 + 0.95 * NL(wx, wy) + 0.45 * NM(wx, wy) + 0.22 * NF(wx, wy)       # outer edge, wanders +-1.5 cubes
-    ri = R1 + 0.55 * NI1(wx, wy) + 0.28 * NI2(wx, wy)                          # rosette / brick boundary
+    ri = R1                                                                    # rosette circle stays a perfect circle
     a2 = SM((ro - r) / 0.75 + 0.5 + 0.30 * NG(wx, wy) + 0.18 * NF(wx, wy))                          # wide soft stone -> ground fade, grainy
-    a1 = SM((ri - r) / 0.4 + 0.5 + 0.22 * NG(wx, wy))
+    a1 = SM((ri - r) / 0.9 + 0.5 + 0.04 * NG(wx, wy))
     i3, j3 = (x - cxi0) % 3, (y - cyi0) % 3; i2, j2 = (x - cxi0) % 2, (y - cyi0) % 2; i4, j4 = x % 4, y % 4
     ros = samp(T_ROS, (i3 + FX) / 3, 1 - (j3 + FY) / 3)
     brk = samp(T_BRK, (i2 + FX) / 2, 1 - (j2 + FY) / 2)
