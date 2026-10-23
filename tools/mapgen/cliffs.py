@@ -108,7 +108,7 @@ def extract_contours(Ds, min_len=22.0, sigma=2.2, spacing=0.25):
     return out
 
 
-def place_gaps(contours, Ds, W1, H1, rng, spacing=70.0, half_open=3.0, taper=4.5):
+def place_gaps(contours, Ds, W1, H1, rng, spacing=70.0, half_open=4.5, taper=4.5):
     """ramps: choose where each contour opens. Needs room on both sides."""
     for ct in contours:
         n = max(1, int(round(ct.L / spacing)))
@@ -201,7 +201,7 @@ class CliffField:
         self.S = S.reshape(shape)
         self.height = self.S * self.step
         self.gd = gd.reshape(shape)
-        ue = np.clip(0.95 * (1.0 - (gd - 3.0) / 4.5), 0.0, 0.99)
+        ue = np.clip(0.95 * (1.0 - (gd - 4.5) / 4.5), 0.0, 0.99)
         self.ue = ue.reshape(shape)
         self.v = (0.5 - 0.84 * d / self.wt).reshape(shape)             # raw: <0.08 top lip ... >0.92 bottom lip
         u = np.zeros(len(P))
@@ -230,7 +230,7 @@ class CliffField:
         out = {}
         self.dropped = 0
         self.why = {}
-        ho, tp = 3.0, 4.5
+        ho, tp = 4.5, 4.5
         tip = ho + 1.5                                  # where the point of the end piece sits
         for x in range(*x_range):
             for y in range(*y_range):

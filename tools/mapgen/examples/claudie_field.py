@@ -93,7 +93,7 @@ def smooth_path(cells, k=4.0, every=6):
     return [(float(pts[i, 0]), float(pts[i, 1])) for i in sel]
 allow = ~lake_zone
 for c in CFS:
-    allow &= (np.abs(c.d) > c.w / 2 + 4.5) | (c.T < 0.12)    # clear of every rock band, except in the ramps
+    allow &= (np.abs(c.d) > c.w / 2 + 4.5) | (c.T < 0.02)    # clear of every rock band, except in the ramps
 allow[:4, :] = allow[-4:, :] = False; allow[:, :4] = allow[:, -4:] = False
 margin = np.minimum.reduce([np.abs(c.d) for c in CFS])
 cliffcost = np.clip(7.0 - margin, 0, 7) * 0.5
@@ -173,7 +173,7 @@ for _ in range(2):
 rockuv = {}
 clash = set()
 for c in CFS:
-    for key, ku in c.rock_cubes((0, W), (0, H), exclude=m.corner_path | shore).items():
+    for key, ku in c.rock_cubes((0, W), (0, H), exclude=(m.corner_path & (EF.dd > 1.0)) | shore).items():
         if key in rockuv:
             clash.add(key)
         rockuv[key] = ku
