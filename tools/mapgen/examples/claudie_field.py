@@ -148,7 +148,8 @@ from tilelib import TileLib, render
 TEX = {0: "ÃÊ¿ø01", 1: "¾ð´ö01", 2: "ÃÊ¿ø02", 3: "Èë02", 4: "¾ð´ö03", 5: "¾ð´ö02", 6: "ÃÊ¿ø04", 7: "¾ð´ö10", 8: "¾ð´ö11", 9: "ÃÊ¿ø09"}
 TEXDIR = os.environ.get("TEXDIR", "/mnt/user-data/uploads/ROO_MAP/data/texture/roo_prtf/")
 tex_paths = {i: TEXDIR + "prt_%s.bmp" % n for i, n in TEX.items()}
-lib = TileLib(tex_paths, plain={0: 0, 1: 3})
+BANNED = {9}                                  # 초원06/08/09 are not used on paths
+lib = TileLib({i: p for i, p in tex_paths.items() if i not in BANNED}, plain={0: 0, 1: 3})
 for t in TEX:
     m.add_texture("#%d" % t)
 # ---- cliff faces: one continuous UV field along the rock ribbon (no seams, no stretching)
@@ -161,15 +162,15 @@ for _ in range(2):
 rockuv = {}
 clash = set()
 for c in CFS:
-    for key, uv in c.rock_cubes((0, W), (0, H), exclude=nearp | shore).items():
+    for key, ku in c.rock_cubes((0, W), (0, H), exclude=m.corner_path | shore).items():
         if key in rockuv:
             clash.add(key)
-        rockuv[key] = uv
+        rockuv[key] = ku
 for key in clash:
     del rockuv[key]
-CL = m.add_texture("#1")
-for (x, y), uv in rockuv.items():
-    m.cube_uv[(x, y)] = (CL, uv)
+CL = m.add_texture("#1"); CLEND = m.add_texture("#7")
+for (x, y), (kind, uv) in rockuv.items():
+    m.cube_uv[(x, y)] = (CLEND if kind == "end" else CL, uv)
 sel = lib.solve(mat, np.random.default_rng(4), fixed=set(rockuv))
 for (x, y), (ti, uv) in sel.items():
     m.cube_uv[(x, y)] = (m.add_texture("#%d" % ti), uv)

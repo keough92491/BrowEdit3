@@ -67,7 +67,7 @@ def extract_contours(Ds, min_len=22.0, sigma=2.2, spacing=0.25):
     return out
 
 
-def place_gaps(contours, Ds, W1, H1, rng, spacing=70.0, half_open=3.0, taper=5.0):
+def place_gaps(contours, Ds, W1, H1, rng, spacing=70.0, half_open=3.0, taper=4.5):
     """ramps: choose where each contour opens. Needs room on both sides."""
     for ct in contours:
         n = max(1, int(round(ct.L / spacing)))
@@ -136,6 +136,14 @@ class CliffField:
         ci = self.cid[idx]
         s = self.sall[idx]
         T = self.taper(ci, s)
+        gd = np.full(len(s), 1e9)
+        for i, ct in enumerate(self.contours):
+            sel = ci == i
+            for g in ct.gaps:
+                dd = np.abs(s[sel] - g)
+                if ct.closed:
+                    dd = np.minimum(dd, ct.L - dd)
+                gd[sel] = np.minimum(gd[sel], dd)
         lin = np.clip(0.5 + d / self.w, 0, 1)
         Sc = 0.65 * lin + 0.35 * _ss(lin)
         Sr = _ss(np.clip(0.5 + d / self.wr, 0, 1))
@@ -144,8 +152,8 @@ class CliffField:
         self.d, self.ci, self.s, self.T = d.reshape(shape), ci.reshape(shape), s.reshape(shape), T.reshape(shape)
         self.S = S.reshape(shape)
         self.height = self.S * self.step
-        wf = self.w * (0.15 + 0.85 * T)
-        self.v = (0.5 - 0.84 * d / wf).reshape(shape)             # raw: <0.08 top lip ... >0.92 bottom lip
+        self.gd = gd.reshape(shape)
+        self.v = (0.5 - 0.84 * d / self.w).reshape(shape)             # raw: <0.08 top lip ... >0.92 bottom lip
         u = np.zeros(len(P))
         for i, ct in enumerate(self.contours):
             sel = ci == i
@@ -153,31 +161,37 @@ class CliffField:
         self.u = u.reshape(shape)
 
     # ------------------------------------------------------------------
-    def rock_cubes(self, x_range, y_range, min_T=0.1, exclude=None):
-        """{(x,y): [(u,v) x4]} for every cube the rock band touches (corner order (x,y),(x+1,y),(x,y+1),(x+1,y+1))."""
+    def rock_cubes(self, x_range, y_range, exclude=None):
+        """{(x,y): (kind, [(u,v) x4])}; kind 'body' = straight face texture, 'end' = the tapering end piece
+        (rock narrows to a point where the cliff meets a ramp). Corner order (x,y),(x+1,y),(x,y+1),(x+1,y+1)."""
         out = {}
+        ho, tp = 3.0, 4.5
         for x in range(*x_range):
             for y in range(*y_range):
                 cc = [(x, y), (x + 1, y), (x, y + 1), (x + 1, y + 1)]
                 if exclude is not None and any(exclude[a, b] for a, b in cc):
                     continue
-                Tm = np.mean([self.T[a, b] for a, b in cc])
-                if Tm < min_T:
-                    continue
                 vr = np.array([self.v[a, b] for a, b in cc])
                 if vr.max() < 0.06 or vr.min() > 0.94:
                     continue
+                gds = np.array([self.gd[a, b] for a, b in cc])
+                end = gds.min() < ho + tp
+                if end and gds.max() <= ho:
+                    continue                      # inside the ramp: no rock
                 cids = {int(self.ci[a, b]) for a, b in cc}
-                us = np.array([self.u[a, b] for a, b in cc])
-                ct = self.contours[int(self.ci[cc[0][0], cc[0][1]])]
                 if len(cids) > 1:
-                    continue                     # corners follow different cliffs (a narrow neck): leave to grass
-                if ct.closed:
-                    per = ct.period
-                    us = us[0] + ((us - us[0] + per / 2) % per) - per / 2
-                if us.max() - us.min() > 0.9:
-                    continue
-                us = us - np.floor(us.min())
+                    continue                      # corners follow different cliffs (a narrow neck): leave to grass
+                ct = self.contours[int(self.ci[cc[0][0], cc[0][1]])]
+                if end:
+                    us = np.clip(0.95 * (1.0 - (gds - ho) / tp), 0.0, 1.0)
+                else:
+                    us = np.array([self.u[a, b] for a, b in cc])
+                    if ct.closed:
+                        per = ct.period
+                        us = us[0] + ((us - us[0] + per / 2) % per) - per / 2
+                    if us.max() - us.min() > 0.9:
+                        continue
+                    us = us - np.floor(us.min())
                 vr = np.clip(vr, 0.03, 0.97)
-                out[(x, y)] = [(float(us[i]), float(vr[i])) for i in range(4)]
+                out[(x, y)] = ("end" if end else "body", [(float(us[i]), float(vr[i])) for i in range(4)])
         return out
