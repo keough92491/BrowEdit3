@@ -131,6 +131,7 @@ _zone = ((cx - 54.15) * 0.707 + (cy - 95.25) * 0.707 < 0) & (cx >= 30) & (cx <= 
 _m = np.where(_zone, _wm, _m)
 field = ndi.gaussian_filter(ndi.distance_transform_edt(_m) - ndi.distance_transform_edt(~_m), 1.1)
 field = np.clip(field, -4, 4)
+np.save(SCR + 'road_field2.npy', field)
 EF = EdgeField(field, Wc, Hc, np.random.default_rng(11), lo=-0.04, straddle=True)
 mat = np.zeros((Wc, Hc), int); mat[EF.dd > 0] = 1
 st = ndi.generate_binary_structure(2, 1)
