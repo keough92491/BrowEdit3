@@ -1,7 +1,7 @@
 """novground upper-left mine dungeon (Mjolnir Dead Pit style), traced from the user's guide image.
 Floor 0, rock mass raised RISE (black ceiling), 4-cube cave slopes, baked atlases from 폐광던전 textures (no stretching).
 Writes ul_h.json / ul_g.json / ul_t.json (provisional slots) and prt_novmd01..N.bmp into /mnt/user-data/outputs."""
-import json, sys
+import json, os, sys
 import numpy as np
 from PIL import Image, ImageDraw
 from scipy import ndimage as ndi
@@ -33,7 +33,7 @@ corridors = [
     [(700, 625), (760, 622), (800, 620)],
     [(387, 802), (405, 730), (423, 654), (455, 605), (492, 574), (540, 550), (595, 530)],
 ]
-exit_ext = [(780, 621), (860, 620), (930, 620), (975, 620)]
+exit_ext = [(780, 621), (860, 620), (930, 620), (998, 620)]
 CW = 2.6                                       # drawn corridor width, cubes (+2 after dilation)
 S_ = lambda t: (lambda u: u * u * (3 - 2 * u))(np.clip(t, 0, 1))
 def to_px(x, y): return ((x - X0) * R, (NY - 1) - (y - Y0) * R)
@@ -63,10 +63,14 @@ core_w = ndi.distance_transform_edt(~(ndi.gaussian_filter(floor_core0.astype(flo
 dCore = ndi.distance_transform_edt(~core_w) / R
 rad = (8.5 + 7.0 * S_((fy - 165) / 18) * S_((72 - fx) / 8) + 6.0 * S_((30 - fx) / 16) + 4.0 * S_((138 - fy) / 14) + 6.0 * S_((fx - 42) / 8) * S_((fy - 140) / 8) * S_((197 - fy) / 6))
 block = dCore <= rad + 1.7 * noiseL
-block = ndi.binary_fill_holes(block)
+_cap = json.load(open(SCR + "red2_cube2.json"))["cap"]
+_cv = [(x, y) for x, y in _cap] + [(77.6, 143.9), (95, 143.9), (95, 152), (70.4, 152)]
+_ci = Image.new("L", (NX, NY), 0); ImageDraw.Draw(_ci).polygon([to_px(x, y) for x, y in _cv], fill=255)
+carve = np.array(_ci)[::-1].T > 127
+block = ndi.binary_fill_holes(block) & ~carve
 block &= (fx > 2.0) & (fy < 197.5) & ~((fx > 70) & (fy > 150))
 block = ndi.gaussian_filter(block.astype(float), 1.6 * R) > 0.5
-block = ndi.binary_fill_holes(block)
+block = ndi.binary_fill_holes(block) & ~carve
 # the east exit: let the corridor run out of the rock mass
 dB = ndi.distance_transform_edt(block) / R
 dF = dF0
@@ -161,6 +165,7 @@ PERA, PERY = ATLW // CELL, ATLH // CELL; NC = PERA * PERY
 cs_ = (np.arange(CELL) + 0.5) / CELL
 FXc, FYc = np.meshgrid(cs_, 1 - cs_)
 baked, plain = [], []
+_cells = {}
 for x in range(NXc):
     for y in range(NYc):
         ax, ay = x + X0, y + Y0
@@ -195,6 +200,7 @@ for n_, (x, y) in enumerate(baked):
     col = col * (1 - wg[..., None]) + gr * wg[..., None]
     wcv = 1 - smooth((-se - 0.2 + 0.3 * n1) / 2.6)                      # the east exit: cave floor fades into the grass outside the rock
     col = col * wcv[..., None] + gr * (1 - wcv[..., None])
+    _cells['%d_%d' % (x, y)] = np.clip(col, 0, 255).astype(np.uint8)
     k, c = divmod(n_, NC); cy_, cx_ = divmod(c, PERA)
     atl[k][cy_ * CELL:(cy_ + 1) * CELL, cx_ * CELL:(cx_ + 1) * CELL] = np.clip(col, 0, 255).astype(np.uint8)
     eu, ev = 0.5 / ATLW, 0.5 / ATLH
@@ -212,6 +218,8 @@ for k in range(natl):
     im = atl[k]
     Image.fromarray(im).quantize(colors=256, method=Image.Quantize.MEDIANCUT, dither=Image.Dither.FLOYDSTEINBERG).save(OUT + "prt_novme%02d.bmp" % (k + 1))
     Image.fromarray(im).save(SCR + "novmd%02d.png" % (k + 1))
+np.savez_compressed(SCR + "cells_" + os.environ.get("TAG", "x") + ".npz", **_cells)
+json.dump({"plain": [[a, b] for a, b, _ in plain], "baked": [list(p) for p in baked]}, open(SCR + "sets_" + os.environ.get("TAG", "x") + ".json", "w"))
 print("baked", len(baked), "plain", len(plain), "atlases", natl)
 
 # ---- gat (2x2 cells per cube): floor walkable, rock / slopes blocked
