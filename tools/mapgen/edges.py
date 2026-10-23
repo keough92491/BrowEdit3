@@ -10,15 +10,16 @@ EDGE_U = 0.13          # where the dirt/grass line sits in the texture (dirt for
 
 
 class EdgeField:
-    def __init__(self, dirt, W1, H1, rng, scale=0.1):
+    def __init__(self, field, W1, H1, rng, scale=0.25):
+        """field: smooth scalar, > 0 in the dirt, 0 on the edge (a distance, so the outline has no cube staircase)"""
         self.scale = scale
-        self.Ds = signed_field(dirt, 1.2)
+        self.Ds = field
         self.contours = extract_contours(self.Ds, min_len=8.0, sigma=1.5)
         self.W1, self.H1 = W1, H1
         phase = [float(rng.random()) for _ in self.contours]
         self.phase = phase
         if not self.contours:
-            self.dd = np.where(dirt, 5.0, -5.0); self.u = self.v = np.zeros((W1, H1)); self.ci = np.zeros((W1, H1), int)
+            self.dd = np.where(field > 0, 5.0, -5.0); self.u = self.v = np.zeros((W1, H1)); self.ci = np.zeros((W1, H1), int)
             return
         pts = np.vstack([c.pts for c in self.contours])
         self.cid = np.concatenate([np.full(len(c.pts), i) for i, c in enumerate(self.contours)])
@@ -72,6 +73,6 @@ class EdgeField:
                     continue
                 vs = vs - np.floor(vs.min())
                 us = EDGE_U - self.scale * dd
-                us = np.clip(us, -0.10, 0.85)
+                us = np.clip(us, -0.12, 0.85)
                 out[(x, y)] = [(float(us[i]), float(vs[i])) for i in range(4)]
         return out

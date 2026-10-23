@@ -21,6 +21,9 @@ class Contour:
     pass
 
 
+KK = 0.2
+
+
 def signed_field(inside, sigma=3.0):
     sd = ndi.distance_transform_edt(inside) - ndi.distance_transform_edt(~inside)
     return ndi.gaussian_filter(sd, sigma, mode="nearest")
@@ -56,11 +59,11 @@ def extract_contours(Ds, min_len=22.0, sigma=2.2, spacing=0.25):
         ct.closed = closed
         ct.L = len(pts) * spacing if closed else L
         if closed:
-            n = max(1, int(round(ct.L * 0.25)))
+            n = max(1, int(round(ct.L * KK)))
             ct.k = n / ct.L                    # whole texture periods round the loop: no seam where it closes
             ct.period = float(n)
         else:
-            ct.k = 0.25
+            ct.k = KK
             ct.period = None
         ct.gaps = []
         out.append(ct)
@@ -97,8 +100,10 @@ def _cdist(ct, a, b):
 class CliffField:
     """Evaluates height / texture coordinates at any set of points (corner grid)."""
 
-    def __init__(self, inside, W1, H1, step=30.0, w=2.6, wr=14.0, rng=None, sigma=3.0, gaps=True):
+    def __init__(self, inside, W1, H1, step=30.0, w=2.6, wr=14.0, rng=None, sigma=3.0, gaps=True, wt=None, kk=0.2):
         self.W1, self.H1, self.step, self.w, self.wr = W1, H1, step, w, wr
+        self.wt = wt or w
+        self.kk = kk
         self.rng = rng or np.random.default_rng(0)
         self.Ds = signed_field(inside, sigma)
         self.contours = extract_contours(self.Ds)
@@ -153,7 +158,7 @@ class CliffField:
         self.S = S.reshape(shape)
         self.height = self.S * self.step
         self.gd = gd.reshape(shape)
-        self.v = (0.5 - 0.84 * d / self.w).reshape(shape)             # raw: <0.08 top lip ... >0.92 bottom lip
+        self.v = (0.5 - 0.84 * d / self.wt).reshape(shape)             # raw: <0.08 top lip ... >0.92 bottom lip
         u = np.zeros(len(P))
         for i, ct in enumerate(self.contours):
             sel = ci == i
@@ -161,6 +166,22 @@ class CliffField:
         self.u = u.reshape(shape)
 
     # ------------------------------------------------------------------
+    max_stretch = 1.8
+
+    def stretch(self, x, y, uv):
+        """how unevenly the texture is stretched over cube (x,y) (1 = not at all)"""
+        h = self.height
+        P = [np.array([x * 10, h[x, y], y * 10]), np.array([(x + 1) * 10, h[x + 1, y], y * 10]),
+             np.array([x * 10, h[x, y + 1], (y + 1) * 10]), np.array([(x + 1) * 10, h[x + 1, y + 1], (y + 1) * 10])]
+        U = [np.array(c, dtype=float) for c in uv]
+        e1 = ((P[1] - P[0]) + (P[3] - P[2])) / 2; e2 = ((P[2] - P[0]) + (P[3] - P[1])) / 2
+        a1 = ((U[1] - U[0]) + (U[3] - U[2])) / 2; a2 = ((U[2] - U[0]) + (U[3] - U[1])) / 2
+        J = np.stack([a1, a2], 1)
+        if abs(np.linalg.det(J)) < 1e-5:
+            return 99.0
+        sv = np.linalg.svd(np.stack([e1, e2], 1) @ np.linalg.inv(J), compute_uv=False)
+        return float(sv[0] / max(sv[1], 1e-9))
+
     def _u_on(self, ci, P):
         """u of points P projected onto contour ci only"""
         ct = self.contours[ci]
@@ -173,6 +194,7 @@ class CliffField:
         """{(x,y): (kind, [(u,v) x4])}; kind 'body' = straight face texture, 'end' = the tapering end piece
         (rock narrows to a point where the cliff meets a ramp). Corner order (x,y),(x+1,y),(x,y+1),(x+1,y+1)."""
         out = {}
+        self.dropped = 0
         ho, tp = 3.0, 4.5
         tip = ho + 1.5                                  # where the point of the end piece sits
         for x in range(*x_range):
@@ -181,8 +203,9 @@ class CliffField:
                 if exclude is not None and any(exclude[a, b] for a, b in cc):
                     continue
                 vr = np.array([self.v[a, b] for a, b in cc])
-                if vr.max() < 0.06 or vr.min() > 0.94:
-                    continue
+                if vr.max() < 0.2 or vr.min() > 0.93:
+                    continue                      # no rock in this cube
+                clamped = vr.min() < -0.03 or vr.max() > 1.03
                 gds = np.array([self.gd[a, b] for a, b in cc])
                 end = gds.min() < ho + tp
                 if end and (gds < tip).sum() >= 2:
@@ -205,6 +228,9 @@ class CliffField:
                     if us.max() - us.min() > 0.9:
                         continue
                     us = us - np.floor(us.min())
-                vr = np.clip(vr, 0.03, 0.97)
+                vr = np.clip(vr, 0.0, 1.0)
+                if self.stretch(x, y, [(us[i], vr[i]) for i in range(4)]) > self.max_stretch:
+                    self.dropped += 1             # would smear the grass lip over the cube: leave it to plain grass
+                    continue
                 out[(x, y)] = ("end" if end else "body", [(float(us[i]), float(vr[i])) for i in range(4)])
         return out

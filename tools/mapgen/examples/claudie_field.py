@@ -52,7 +52,7 @@ lvl = mk0.astype(int) + mk1.astype(int)
 CFS = []
 for k, mk in enumerate((mk0, mk1)):
     if mk.any() and (~mk).any():
-        CFS.append(CliffField(mk, W + 1, H + 1, step=STEP, w=float(os.environ.get("CLIFFW", 3.0)), rng=np.random.default_rng(m.seed + 7 + k)))
+        CFS.append(CliffField(mk, W + 1, H + 1, step=STEP, w=float(os.environ.get("CLIFFW", 3.0)), wt=float(os.environ.get("CLIFFWT", 3.0)), rng=np.random.default_rng(m.seed + 7 + k)))
 m.base = sum(c.height for c in CFS)
 m.base += (smooth_noise(9, np.random.default_rng(3)) - 0.5) * 0.8        # a little roughness
 for c in CFS:
@@ -129,8 +129,9 @@ for k in range(top + 1):
     cb, _ = route(allow & (LEVEL == k), tuple(st), tuple(far), wob + cliffcost)
     if len(cb) >= 14:
         paths.append(smooth_path(cb))
+PATHW = 3.2
 for pts in paths:
-    m.path(pts, width=3.8, flatten=0.4)
+    m.path(pts, width=PATHW, flatten=0.4)
 
 # ---- texturing
 m.paint_all(GRASS)
@@ -143,9 +144,16 @@ m.masks["dirt"] = dirt_cubes.astype(float)
 mat = np.zeros((W + 1, H + 1), dtype=int)
 cw = np.pad(ring, ((1, 1), (1, 1)))          # corner (x,y) touches cubes (x-1..x, y-1..y)
 shore = cw[:-1, :-1] | cw[1:, :-1] | cw[:-1, 1:] | cw[1:, 1:]
-dirt_corner = m.corner_path | shore
+gxc, gyc = m._grid()
+field = np.full((W + 1, H + 1), -9.0)
+for pts in paths:                                   # smooth: distance to the path's centre line, not a cube staircase
+    field = np.maximum(field, PATHW / 2.0 - m._dist_to_polyline(pts, gxc, gyc))
+wsm = ndi.gaussian_filter(wm[:W, :H].astype(float), 1.5)           # lake shore: a soft, round outline
+wsm = np.pad(wsm, ((0, 1), (0, 1)), mode="edge")
+field = np.maximum(field, (wsm - 0.18) * 6.0)
+dirt_corner = field > 0
 from edges import EdgeField
-EF = EdgeField(dirt_corner, W + 1, H + 1, np.random.default_rng(11))
+EF = EdgeField(field, W + 1, H + 1, np.random.default_rng(11))
 mat[EF.dd > 0] = 1
 from tilelib import TileLib, render
 TEX = {0: "ÃÊ¿ø01", 1: "¾ð´ö01", 2: "ÃÊ¿ø02", 3: "Èë02", 4: "¾ð´ö03", 5: "¾ð´ö02", 6: "ÃÊ¿ø04", 7: "¾ð´ö10", 8: "¾ð´ö11", 9: "ÃÊ¿ø09"}
@@ -171,6 +179,7 @@ for c in CFS:
         rockuv[key] = ku
 for key in clash:
     del rockuv[key]
+print('rock cubes', len(rockuv), 'dropped', sum(c.dropped for c in CFS))
 CL = m.add_texture("#1"); CLEND = m.add_texture("#7")
 for (x, y), (kind, uv) in rockuv.items():
     m.cube_uv[(x, y)] = (CLEND if kind == "end" else CL, uv)
