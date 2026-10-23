@@ -71,6 +71,11 @@ namespace
 
 	int findTexture(Gnd* gnd, const std::string& file)
 	{
+		if (file.size() > 1 && file[0] == '#' && isdigit((unsigned char)file[1]))
+		{
+			int n = atoi(file.c_str() + 1);
+			return (n >= 0 && n < (int)gnd->textures.size()) ? n : -1;
+		}
 		std::string f = lower(file);
 		std::replace(f.begin(), f.end(), '/', '\\');
 		for (size_t i = 0; i < gnd->textures.size(); i++)
@@ -78,6 +83,8 @@ namespace
 			std::string t = lower(gnd->textures[i]->file);
 			std::replace(t.begin(), t.end(), '/', '\\');
 			if (t == f)
+				return (int)i;
+			if (lower(util::iso_8859_1_to_utf8(gnd->textures[i]->file)) == f)
 				return (int)i;
 		}
 		return -1;
