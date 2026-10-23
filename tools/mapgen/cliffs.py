@@ -161,11 +161,20 @@ class CliffField:
         self.u = u.reshape(shape)
 
     # ------------------------------------------------------------------
+    def _u_on(self, ci, P):
+        """u of points P projected onto contour ci only"""
+        ct = self.contours[ci]
+        if not hasattr(ct, "tree"):
+            ct.tree = cKDTree(ct.pts)
+        _, idx = ct.tree.query(P)
+        return ct.k * ct.s[idx] + self.phase[ci]
+
     def rock_cubes(self, x_range, y_range, exclude=None):
         """{(x,y): (kind, [(u,v) x4])}; kind 'body' = straight face texture, 'end' = the tapering end piece
         (rock narrows to a point where the cliff meets a ramp). Corner order (x,y),(x+1,y),(x,y+1),(x+1,y+1)."""
         out = {}
         ho, tp = 3.0, 4.5
+        tip = ho + 1.5                                  # where the point of the end piece sits
         for x in range(*x_range):
             for y in range(*y_range):
                 cc = [(x, y), (x + 1, y), (x, y + 1), (x + 1, y + 1)]
@@ -176,16 +185,20 @@ class CliffField:
                     continue
                 gds = np.array([self.gd[a, b] for a, b in cc])
                 end = gds.min() < ho + tp
-                if end and gds.max() <= ho:
-                    continue                      # inside the ramp: no rock
-                cids = {int(self.ci[a, b]) for a, b in cc}
-                if len(cids) > 1:
-                    continue                      # corners follow different cliffs (a narrow neck): leave to grass
-                ct = self.contours[int(self.ci[cc[0][0], cc[0][1]])]
+                if end and (gds < tip).sum() >= 2:
+                    continue                      # beyond the point of the end piece: plain grass
+                cids = [int(self.ci[a, b]) for a, b in cc]
+                ds = np.abs([self.d[a, b] for a, b in cc])
+                c0 = cids[int(np.argmin(ds))]
+                ct = self.contours[c0]
                 if end:
-                    us = np.clip(0.95 * (1.0 - (gds - ho) / tp), 0.0, 1.0)
+                    us = np.clip(0.95 * (1.0 - (gds - tip) / (ho + tp - tip)), 0.0, 1.0)
                 else:
-                    us = np.array([self.u[a, b] for a, b in cc])
+                    if len(set(cids)) > 1:
+                        P = np.array(cc, dtype=float)
+                        us = self._u_on(c0, P)
+                    else:
+                        us = np.array([self.u[a, b] for a, b in cc])
                     if ct.closed:
                         per = ct.period
                         us = us[0] + ((us - us[0] + per / 2) % per) - per / 2

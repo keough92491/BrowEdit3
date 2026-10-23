@@ -143,7 +143,10 @@ m.masks["dirt"] = dirt_cubes.astype(float)
 mat = np.zeros((W + 1, H + 1), dtype=int)
 cw = np.pad(ring, ((1, 1), (1, 1)))          # corner (x,y) touches cubes (x-1..x, y-1..y)
 shore = cw[:-1, :-1] | cw[1:, :-1] | cw[:-1, 1:] | cw[1:, 1:]
-mat[m.corner_path | shore] = 1
+dirt_corner = m.corner_path | shore
+from edges import EdgeField
+EF = EdgeField(dirt_corner, W + 1, H + 1, np.random.default_rng(11))
+mat[EF.dd > 0] = 1
 from tilelib import TileLib, render
 TEX = {0: "ÃÊ¿ø01", 1: "¾ð´ö01", 2: "ÃÊ¿ø02", 3: "Èë02", 4: "¾ð´ö03", 5: "¾ð´ö02", 6: "ÃÊ¿ø04", 7: "¾ð´ö10", 8: "¾ð´ö11", 9: "ÃÊ¿ø09"}
 TEXDIR = os.environ.get("TEXDIR", "/mnt/user-data/uploads/ROO_MAP/data/texture/roo_prtf/")
@@ -171,7 +174,11 @@ for key in clash:
 CL = m.add_texture("#1"); CLEND = m.add_texture("#7")
 for (x, y), (kind, uv) in rockuv.items():
     m.cube_uv[(x, y)] = (CLEND if kind == "end" else CL, uv)
-sel = lib.solve(mat, np.random.default_rng(4), fixed=set(rockuv))
+EDGE = m.add_texture("#2")
+edgeuv = EF.edge_cubes((0, W), (0, H), skip=set(rockuv))
+for key, uv in edgeuv.items():
+    m.cube_uv[key] = (EDGE, uv)
+sel = lib.solve(mat, np.random.default_rng(4), fixed=set(rockuv) | set(edgeuv))
 for (x, y), (ti, uv) in sel.items():
     m.cube_uv[(x, y)] = (m.add_texture("#%d" % ti), uv)
 dirt = dirt_cubes
