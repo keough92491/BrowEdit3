@@ -94,10 +94,27 @@ TEX = "/mnt/user-data/uploads/texture/"
 def load(p): return np.array(Image.open(p).convert("RGB")).astype(float)
 FL = load(TEX + "1\u00c7\u00ca\u00b5\u00e5\u00b9\u00d9\u00b4\u00da/\u00b5\u00bf\u00b1\u00bc\u00b4\u00f8\u00c0\u00fc00.bmp")
 RKT = load(TEX + "1\u00c7\u00ca\u00b5\u00e5\u00b9\u00d9\u00b4\u00da/\u00b5\u00bf\u00b1\u00bc\u00b4\u00f8\u00c0\u00fc01.bmp")
+SDI = load(TEX + "\u00c7\u00ca\u00b5\u00e5\u00b9\u00d9\u00b4\u00da/prt_\u00c8\u00eb02.bmp")
 GR = load(TEX + "\u00c7\u00ca\u00b5\u00e5\u00b9\u00d9\u00b4\u00da/prt_\u00c3\u00ca\u00bf\u00f801.bmp")
 G = 4
 FU, FV = (0.03, 0.97), (0.03, 0.97)          # floor 00 span per G cubes
-KU, KV = (0.15, 0.85), (0.27, 0.73)          # rock: band of 01
+KU, KV = (0.15, 0.85), (0.36, 0.72)          # rock: band of 01
+def flatten(img, U, V):
+    r0, r1 = int(V[0] * 256), int(V[1] * 256); c0, c1 = int(U[0] * 256), int(U[1] * 256)
+    out = img.copy()
+    band = img[r0:r1, c0:c1].mean(2)
+    tgt = band.mean()
+    pr = ndi.gaussian_filter1d(band.mean(1), 2.5)
+    gr_ = np.ones(256); gr_[r0:r1] = tgt / pr
+    gr_[:r0] = gr_[r0]; gr_[r1:] = gr_[r1 - 1]
+    out *= gr_[:, None, None]
+    band2 = out[r0:r1, c0:c1].mean(2)
+    pc = ndi.gaussian_filter1d(band2.mean(0), 2.5)
+    gc_ = np.ones(256); gc_[c0:c1] = tgt / pc
+    gc_[:c0] = gc_[c0]; gc_[c1:] = gc_[c1 - 1]
+    out *= gc_[None, :, None]
+    return np.clip(out, 0, 255)
+RKT = flatten(RKT, KU, KV)
 def mir(w, g=G):                              # mirrored triangle coordinate in [0,1]
     gi = np.floor(w / g); l = (w - gi * g) / g
     return np.where(gi % 2 == 0, l, 1 - l)
@@ -121,6 +138,8 @@ shade_f = 1 + 0.6 * (dotl - Lv[2])
 def fld(a, wx, wy): return ndi.map_coordinates(a, [wx * R - 0.5, wy * R - 0.5], order=1, mode="nearest")
 nz1 = ndi.gaussian_filter(rng.standard_normal((N, N)), 0.5 * R); nz1 /= nz1.std()
 nz2 = ndi.gaussian_filter(rng.standard_normal((N, N)), 0.25 * R); nz2 /= nz2.std()
+nz3a = ndi.gaussian_filter(rng.standard_normal((N, N)), 2.2 * R); nz3a /= nz3a.std()
+nz3b = ndi.gaussian_filter(rng.standard_normal((N, N)), 2.2 * R); nz3b /= nz3b.std()
 smooth = lambda t: (lambda u: u * u * (3 - 2 * u))(np.clip(t, 0, 1))
 
 CELL, ATLW, ATLH = 40, 1024, 512                     # 1024x512 8-bit BMP = ~0.5 MB each
@@ -136,11 +155,12 @@ plain = []        # (x, y, kind)
 ent_ex = np.zeros((W, W), bool)
 for x in range(W):
     for y in range(W):
-        ent_ex[x, y] = (abs(x + 0.5 - 42.4) < 6.5) and (y + 0.5 > 64)
+        ent_ex[x, y] = (abs(x + 0.5 - 42.4) < 6.5) and (y + 0.5 > 58)
 for x in range(W):
     for y in range(W):
         ses = [SEc[x, y], SEc[x + 1, y], SEc[x, y + 1], SEc[x + 1, y + 1]]
-        ext = (not inblk[x, y]) and (not ent_ex[x, y]) and min(ses) > -2.6 and max(ses) < 0.3
+        mouth = (not inblk[x, y]) and ent_ex[x, y] and y <= 70 and (x - 42.4) ** 2 < 36
+        ext = ((not inblk[x, y]) and (not ent_ex[x, y]) and min(ses) > -2.6 and max(ses) < 0.3) or mouth
         if not (inblk[x, y] or ext):
             continue
         sds = [SDc[x, y], SDc[x + 1, y], SDc[x, y + 1], SDc[x + 1, y + 1]]
@@ -159,7 +179,7 @@ for n_, (x, y) in enumerate(baked):
     wx = x + FXc; wy = y + FYc
     sd = fld(SD, wx, wy); db = fld(dB, wx, wy); sh = fld(shade_f, wx, wy)
     n1 = fld(nz1, wx, wy); n2 = fld(nz2, wx, wy)
-    fl = tex_at(FL, wx, wy, FU, FV); rk = tex_at(RKT, wx, wy, KU, KV, 3, 2)      # same texel density as the floor (~60 px per cube)
+    fl = tex_at(FL, wx, wy, FU, FV); rk = tex_at(RKT, wx + 0.35 * fld(nz3a, wx, wy), wy + 0.35 * fld(nz3b, wx, wy), KU, KV, 3, 2)      # same texel density as the floor (~60 px per cube)
     gr = tex_at(GR, wx, wy, (0.0, 1.0), (0.0, 1.0))
     wr = smooth((sd + 0.12 + 0.30 * n1 + 0.10 * n2) / 0.85)             # floor -> rock, ragged natural foot of the wall
     col = fl * (1 - wr[..., None]) + rk * wr[..., None]
@@ -171,6 +191,9 @@ for n_, (x, y) in enumerate(baked):
     col = col * ao[..., None] * np.clip(sh, 0.62, 1.25)[..., None]
     wg = (1 - smooth((se + 0.7 + 0.35 * n1 + 0.1 * n2) / 2.3)) * smooth(dfo / 1.2)   # rock foot melts into the grass
     col = col * (1 - wg[..., None]) + gr * wg[..., None]
+    sand = tex_at(SDI, wx, wy, (0.0, 1.0), (0.0, 1.0))
+    wsd = smooth((wy - 66.0 + 0.4 * n1) / 3.2) * (1 - wg) * smooth((dfo * -1 + 1.2) / 1.2)   # cave floor turns into the sand road at the mouth
+    col = col * (1 - wsd[..., None]) + sand * wsd[..., None]
     k, c = divmod(n_, NC); cy_, cx_ = divmod(c, PERA)
     atl[k][cy_ * CELL:(cy_ + 1) * CELL, cx_ * CELL:(cx_ + 1) * CELL] = np.clip(col, 0, 255).astype(np.uint8)
     eu, ev = 0.5 / ATLW, 0.5 / ATLH
