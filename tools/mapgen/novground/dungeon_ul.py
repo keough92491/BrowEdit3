@@ -30,8 +30,10 @@ corridors = [
     [(255, 790), (330, 810), (420, 815), (470, 805)],
     [(570, 760), (590, 710), (595, 665), (602, 640)],
     [(520, 415), (565, 445), (590, 490), (600, 550), (605, 600), (615, 625)],
-    [(700, 625), (760, 622), (800, 620), (850, 620)],
+    [(700, 625), (760, 622), (800, 620)],
+    [(387, 802), (405, 730), (423, 654), (455, 605), (492, 574), (540, 550), (595, 530)],
 ]
+exit_ext = [(780, 621), (860, 620), (930, 620), (975, 620)]
 CW = 2.6                                       # drawn corridor width, cubes (+2 after dilation)
 S_ = lambda t: (lambda u: u * u * (3 - 2 * u))(np.clip(t, 0, 1))
 def to_px(x, y): return ((x - X0) * R, (NY - 1) - (y - Y0) * R)
@@ -43,6 +45,10 @@ for line in corridors:
     pts = [to_px(*cc(*p)) for p in line]
     d.line(pts, fill=255, width=int(CW * R), joint="curve")
     for p in pts: d.ellipse([p[0] - CW * R / 2, p[1] - CW * R / 2, p[0] + CW * R / 2, p[1] + CW * R / 2], fill=255)
+floor_core0 = np.array(img)[::-1].T > 127
+_d2 = ImageDraw.Draw(img); _pts = [to_px(*cc(*p)) for p in exit_ext]
+_d2.line(_pts, fill=255, width=int(CW * R), joint="curve")
+for p in _pts: _d2.ellipse([p[0] - CW * R / 2, p[1] - CW * R / 2, p[0] + CW * R / 2, p[1] + CW * R / 2], fill=255)
 floor0 = np.array(img)[::-1].T > 127           # [i(x), j(y)]
 fx, fy = np.meshgrid(X0 + (np.arange(NX) + 0.5) / R, Y0 + (np.arange(NY) + 0.5) / R, indexing="ij")
 rng = np.random.default_rng(23)
@@ -53,11 +59,14 @@ fm = ndi.gaussian_filter(floor0.astype(float), 1.0 * R) + 0.06 * noise2
 floor = fm > 0.5
 floor_w = ndi.distance_transform_edt(~floor) / R <= 1.0
 dF0 = ndi.distance_transform_edt(~floor_w) / R
-# rock mass around everything: radius ~8 cubes with slow wobble, smoothed
-block = dF0 <= 8.0 + 1.7 * noiseL
+core_w = ndi.distance_transform_edt(~(ndi.gaussian_filter(floor_core0.astype(float), 1.0 * R) + 0.06 * noise2 > 0.5)) / R <= 1.0
+dCore = ndi.distance_transform_edt(~core_w) / R
+rad = (8.5 + 7.0 * S_((fy - 165) / 18) * S_((72 - fx) / 8) + 6.0 * S_((30 - fx) / 16) + 4.0 * S_((138 - fy) / 14) + 6.0 * S_((fx - 42) / 8) * S_((fy - 140) / 8) * S_((197 - fy) / 6))
+block = dCore <= rad + 1.7 * noiseL
 block = ndi.binary_fill_holes(block)
+block &= (fx > 2.0) & (fy < 197.5) & ~((fx > 70) & (fy > 150))
 block = ndi.gaussian_filter(block.astype(float), 1.6 * R) > 0.5
-block |= floor_w & (ndi.distance_transform_edt(~block) / R < 0)                 # no-op safety
+block = ndi.binary_fill_holes(block)
 # the east exit: let the corridor run out of the rock mass
 dB = ndi.distance_transform_edt(block) / R
 dF = dF0
@@ -77,6 +86,16 @@ data = []
 for y in range(NYc):
     for x in range(NXc):
         data += [round(float(HC[x, y]), 2), round(float(HC[x + 1, y]), 2), round(float(HC[x, y + 1]), 2), round(float(HC[x + 1, y + 1]), 2)]
+_cl = np.array(json.load(open(OUT + "cl11.json"))["commands"][0]["data"]).reshape(50, 90, 4)
+_n = 0
+for y in range(NYc):
+    for x in range(NXc):
+        ax, ay = x + X0, y + Y0
+        if ax >= 60 and ay >= 150 and ax < 150:
+            i = (y + Y0 - 150) * 0 + (ay - 150); j = ax - 60
+            if abs(np.array([HC[x, y], HC[x + 1, y], HC[x, y + 1], HC[x + 1, y + 1]])).max() < 0.01 and j < 90:
+                base = (y * NXc + x) * 4; data[base:base + 4] = [float(v) for v in _cl[i, j]]; _n += 1
+print("cliff cubes restored", _n)
 heights = {"cmd": "heights", "x0": X0, "y0": Y0, "w": NXc, "h": NYc, "data": data, "gat": True}
 
 cmin = np.array([[min(HC[x, y], HC[x + 1, y], HC[x, y + 1], HC[x + 1, y + 1]) for y in range(NYc)] for x in range(NXc)])
@@ -110,8 +129,8 @@ def band_tile(img, U, V):
 T3 = band_tile(RK3, (0.10, 0.90), (0.22, 0.80)); T7 = band_tile(RK7, (0.12, 0.88), (0.28, 0.78))
 _ftile = band_tile(_f6, (0.08, 0.92), (0.10, 0.92))
 _fim = Image.fromarray(np.clip(_ftile, 0, 255).astype(np.uint8)).resize((256, 256), Image.LANCZOS)
-_fim.quantize(colors=256, method=Image.Quantize.MEDIANCUT, dither=Image.Dither.NONE).save(OUT + "prt_novmdf.bmp")
-FLT = np.array(Image.open(OUT + "prt_novmdf.bmp").convert("RGB")).astype(float)
+_fim.quantize(colors=256, method=Image.Quantize.MEDIANCUT, dither=Image.Dither.NONE).save(SCR + "prt_novmdf.bmp")
+FLT = np.array(Image.open(SCR + "prt_novmdf.bmp").convert("RGB")).astype(float)
 def per_tex(T, wx, wy, pu, pv, ox=0.0, oy=0.0):
     h, w = T.shape[:2]
     u = (((wx + ox) / pu) % 1.0) * w; v = (1 - (((wy + oy) / pv) % 1.0)) * h
@@ -151,8 +170,7 @@ for x in range(NXc):
         fl_out = (not inblk[x, y]) and min(sds) < 0.5 and min(ses) > -9 and max(ses) < 0.3 and min(sds) < 0.5 and floor_w.reshape(NXc, R, NYc, R)[x, :, y, :].any()
         ext = ((not inblk[x, y]) and min(ses) > -2.6 and max(ses) < 0.3) or fl_out
         if not (inblk[x, y] or ext): continue
-        if not ext and max(sds) <= -1.2 and min(dbs) > 1.5: plain.append((ax, ay, "floor"))
-        elif not ext and min(sds) >= SLOPE + 0.5 and min(dbs) >= SLOPE_B + 0.5: plain.append((ax, ay, "top"))
+        if not ext and min(sds) >= SLOPE + 0.5 and min(dbs) >= SLOPE_B + 0.5: plain.append((ax, ay, "top"))
         else: baked.append((ax, ay))
 natl = (len(baked) + NC - 1) // NC
 atl = [np.zeros((ATLH, ATLW, 3), np.uint8) for _ in range(natl)]
@@ -192,7 +210,7 @@ for x, y, kind in plain:
     else: tiles.append([x, y, SLOT_TOP, 0.06, 0.06, 0.14, 0.06, 0.06, 0.14, 0.14, 0.14])
 for k in range(natl):
     im = atl[k]
-    Image.fromarray(im).quantize(colors=256, method=Image.Quantize.MEDIANCUT, dither=Image.Dither.FLOYDSTEINBERG).save(OUT + "prt_novmd%02d.bmp" % (k + 1))
+    Image.fromarray(im).quantize(colors=256, method=Image.Quantize.MEDIANCUT, dither=Image.Dither.FLOYDSTEINBERG).save(OUT + "prt_novme%02d.bmp" % (k + 1))
     Image.fromarray(im).save(SCR + "novmd%02d.png" % (k + 1))
 print("baked", len(baked), "plain", len(plain), "atlases", natl)
 
