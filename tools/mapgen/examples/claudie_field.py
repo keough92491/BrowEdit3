@@ -13,8 +13,8 @@ DIRT = m.add_texture("#3"); BLOB = m.add_texture("#6")
 rng = np.random.default_rng(m.seed)
 
 # ---- terraces: smooth noise, quantised in soft steps so the contour lines become cliffs
-m.noise(scale=46, amplitude=1.0, octaves=3, persistence=0.45)
-z = m.base * 2.3
+m.noise(scale=float(os.environ.get('TSCALE', 34)), amplitude=1.0, octaves=3, persistence=0.45)
+z = np.maximum(m.base * 2.3, -0.95)        # the lowest terrace is one broad flat floor (room for a lake)
 lvl = np.floor(z)
 frac = z - lvl
 STEP = 18.0
@@ -22,13 +22,21 @@ m.base = STEP * (lvl + _smoothstep((frac - 0.5) / 0.09 + 0.5))
 m.noise(scale=7, amplitude=1.2, octaves=2, seed=3)          # a little roughness on the plateaus
 
 # ---- winding path(s), flattened into ramps wherever they cross a terrace
-main = [(2, 62)]
-for i, x in enumerate(range(14, 100, 14)):
-    main.append((x, 50 + 16 * np.sin(i * 1.3 + 0.7) + rng.uniform(-4, 4)))
-branch = [main[2], (36, 28), (42, 12), (58, 4)]
+y = float(rng.uniform(30, 70))
+main = [(2, y)]
+for x in range(16, 100, 14):
+    y = float(np.clip(y + rng.uniform(-17, 17), 14, 86))
+    main.append((x, y))
+branches = []
+for k in rng.choice(np.arange(1, len(main) - 1), size=2, replace=False):
+    bx, by = main[int(k)]
+    up = by > 50 if rng.random() < 0.3 else by < 50          # go to the roomier side
+    ty = 3 if up else 97
+    branches.append([(bx, by), (bx + rng.uniform(-14, 14), (by + ty) / 2 + rng.uniform(-6, 6)), (bx + rng.uniform(-16, 16), ty)])
 for _ in range(3):
     m.path(main, width=3.8, flatten=0.9)
-    m.path(branch, width=3.0, flatten=0.9)
+    for br in branches:
+        m.path(br, width=3.0, flatten=0.9)
 m.smooth(1)
 
 # ---- lake on the lowest terrace, so one water level does not flood the rest
@@ -65,6 +73,14 @@ steep = np.zeros_like(b, dtype=bool)
 for dx, dy in ((1, 0), (-1, 0), (0, 1), (0, -1)):
     sh = np.roll(np.roll(b, dx, 0), dy, 1)
     steep |= np.abs(b - sh) > 5.0
+cs = np.zeros((W, H), dtype=bool)                       # steep cubes, thickened so the rock band is 2+ cubes wide
+slope_c = m.slope_map()
+cs = slope_c > 0.42
+cs2 = cs.copy()
+for dx, dy in ((1, 0), (-1, 0), (0, 1), (0, -1)):
+    cs2 |= np.roll(np.roll(cs, dx, 0), dy, 1)
+cp = np.pad(cs2, 1)
+steep = cp[:-1, :-1] | cp[1:, :-1] | cp[:-1, 1:] | cp[1:, 1:]
 steep[0, :] = steep[-1, :] = steep[:, 0] = steep[:, -1] = False
 shore = np.zeros_like(steep)
 rc = np.pad(ring, 1)
