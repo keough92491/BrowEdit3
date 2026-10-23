@@ -75,7 +75,7 @@ for (x, y) in rock:
     if max(hh) - min(hh) > 6:
         for j in range(2): rows.append([2 * y + j, 2 * x, 2 * x + 2, 5])
 cmds.append({"cmd": "gat", "rows": rows})
-json.dump({"commands": cmds}, open("/mnt/user-data/outputs/cl7.json", "w"), separators=(",", ":"))
+json.dump({"commands": cmds}, open("/mnt/user-data/outputs/cl8.json", "w"), separators=(",", ":"))
 # preview
 SCR = "/tmp/claude-0/-home-claude/bcc60026-74cc-55ec-960a-59e929b4c57f/scratchpad/"
 pv = np.zeros((Y1 - Y0, X1 - X0, 3), np.uint8)
