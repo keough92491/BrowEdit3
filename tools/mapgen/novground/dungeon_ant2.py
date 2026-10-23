@@ -1,6 +1,6 @@
 """Lower-right ant-nest dungeon, UL-style: smooth cave slopes, black rock ceiling, baked atlases (antflat floor + moss/mine rock).
-Layout traced from the user's 'Ant Nest' guide.  Writes an_h/an_g/an_t json + prt_novan%02d.bmp, preview an_pv.png."""
-import json, os, numpy as np
+Layout traced from the user's 'Ant Nest' guide.  Writes an_h/an_g/an_t json + prt_novao%02d.bmp, preview an_pv.png."""
+import json, os, numpy as np, cv2
 from PIL import Image, ImageDraw
 from scipy import ndimage as ndi
 SCR = "/tmp/claude-0/-home-claude/bcc60026-74cc-55ec-960a-59e929b4c57f/scratchpad/"
@@ -172,6 +172,47 @@ for x in range(NXc):
         if not (inblk[x, y] or ext): continue
         if not ext and min(sds) >= SLOPE + 0.5 and min(dbs) >= SLOPE_B + 0.5: plain.append((ax, ay))
         else: baked.append((ax, ay))
+# ---- new road along the user's red lines (screenshot road_red_shot.png), blended into the old field
+HERE = os.path.dirname(os.path.abspath(__file__))
+T_DIRT = load("/mnt/user-data/uploads/ROO_MAP/data/texture/roo_prtf/prt_Èë03.bmp")
+f3 = np.load(SCR + "road_field3.npy")
+Dm = cv2.imread(os.path.join(HERE, "road_red_shot.png")); HdB = np.load(os.path.join(HERE, "road_Hdb.npy")); HbM = np.load(os.path.join(HERE, "road_Hb.npy"))
+_red = ((Dm[..., 2] > 200) & (Dm[..., 1] < 60) & (Dm[..., 0] < 60)).astype(np.uint8) * 255
+_red = cv2.dilate(_red, np.ones((5, 5), np.uint8)); _lab = ndi.label(_red > 0)[0]
+_loop = ((_lab == _lab[40, 507]) if _lab[40, 507] else (_lab == np.bincount(_lab[_lab > 0]).argmax())).astype(np.uint8) * 255
+cv2.line(_loop, (507, 42), (572, 22), 255, 5); _ff = _loop.copy(); _m = np.zeros((_ff.shape[0] + 2, _ff.shape[1] + 2), np.uint8); cv2.floodFill(_ff, _m, (3, 3), 128)
+loopD = (_ff != 128)
+RQ, RX0, RX1, RY0, RY1 = 8, 144, 168, 70, 110
+rxs = RX0 + (np.arange((RX1 - RX0) * RQ) + 0.5) / RQ; rys = RY0 + (np.arange((RY1 - RY0) * RQ) + 0.5) / RQ
+RX, RY = np.meshgrid(rxs, rys, indexing="ij")
+_P = np.stack([RX.ravel(), RY.ravel(), np.ones(RX.size)]); _Q = np.linalg.inv(HdB) @ np.linalg.inv(HbM) @ _P; _q = (_Q[:2] / _Q[2]).T
+_ix = np.clip(np.round(_q[:, 0]).astype(int), 0, loopD.shape[1] - 1); _iy = np.clip(np.round(_q[:, 1]).astype(int), 0, loopD.shape[0] - 1)
+inloop = loopD[_iy, _ix].reshape(RX.shape)
+old_f = ndi.map_coordinates(f3, [RX, RY], order=1, mode="nearest") > 0
+band = (RY > 77.8) & (RY < 103.3)
+M = np.where(band, inloop, old_f)
+sdR = (ndi.distance_transform_edt(M) - ndi.distance_transform_edt(~M)) / RQ
+sdR = ndi.gaussian_filter(sdR, 0.4 * RQ)
+f4 = f3.copy()
+gx_, gy_ = np.meshgrid(np.arange(RX0, RX1 + 1), np.arange(RY0, RY1 + 1), indexing="ij")
+sdc = ndi.map_coordinates(sdR, [(gx_ - RX0) * RQ - 0.5, (gy_ - RY0) * RQ - 0.5], order=1, mode="nearest")
+_rw = np.random.default_rng(31); _wb = ndi.zoom(_rw.random((14, 14)), 4, order=3)[:RX1 - RX0 + 1, :RY1 - RY0 + 1] - 0.5
+sdc = np.where(sdc > -3.5, sdc + 0.3 * _wb[:sdc.shape[0], :sdc.shape[1]] * 0.0 + 0.25 * (ndi.zoom(_rw.random((9, 15)), 3, order=3)[:sdc.shape[0], :sdc.shape[1]] - 0.5), sdc)
+sdc = np.clip(ndi.gaussian_filter(sdc, 0.5), -4, 4)
+_dw = np.minimum.reduce([gx_ - RX0, RX1 - gx_, gy_ - RY0, RY1 - gy_]); _wg = np.clip(_dw / 3.0, 0, 1); _wg = _wg * _wg * (3 - 2 * _wg)
+f4[RX0:RX1 + 1, RY0:RY1 + 1] = f3[RX0:RX1 + 1, RY0:RY1 + 1] * (1 - _wg) + sdc * _wg
+def road_sd(wx, wy): return ndi.map_coordinates(f4, [wx, wy], order=1, mode="nearest")
+dsetx = {(a, b) for a, b in baked} | {(a, b) for a, b in plain}
+road_cubes = []; road_plain = []
+for x in range(RX0, RX1):
+    for y in range(RY0, RY1):
+        if (x, y) in dsetx: continue
+        v = f4[x:x + 2, y:y + 2]
+        if v.min() < 0.7 and v.max() > -0.7: road_cubes.append((x, y))
+        else: road_plain.append((x, y, v.mean() > 0))
+road_blend = {(x, y) for (x, y) in baked if RX0 <= x < RX1 and y >= RY0}
+baked = baked + road_cubes
+set_road_only = set(road_cubes)
 natl = (len(baked) + NC - 1) // NC
 atl = [np.zeros((ATLH, ATLW, 3), np.uint8) for _ in range(natl)]
 tiles = []; cells = {}
@@ -202,11 +243,17 @@ for n_, (x, y) in enumerate(baked):
     col = col * ao[..., None] * np.clip(sh, 0.5, 1.35)[..., None]
     wg = (1 - smooth((se + 0.7 + 0.35 * n1 + 0.1 * n2) / 2.3)) * smooth(dfo / 1.2)
     out = tile_at(GR, wx, wy)
-    wsand = smooth((wy - 67.0) / 2.5)[..., None]                       # mouth: dirt floor fades into the sand road
-    outc = out * (1 - wsand * (se[..., None] < 0)) + tile_at(SDT, wx, wy) * wsand * (se[..., None] < 0)
+    is_road_only = (x, y) in set_road_only
+    outc = out
     col = col * (1 - wg[..., None]) + outc * wg[..., None]
     wcv = 1 - smooth((-se - 0.2 + 0.3 * n1) / 2.6)
     col = col * wcv[..., None] + outc * (1 - wcv[..., None])
+    if is_road_only: col = out.copy()
+    if is_road_only or (x, y) in road_blend:
+        sdn = road_sd(wx, wy) + 0.12 * fld(nz1, wx, wy) + 0.05 * fld(nz2, wx, wy)
+        wdr = smooth(0.5 + (sdn + 0.04) / 0.55)[..., None]
+        if (x, y) in road_blend: wdr = wdr * smooth((wy - 71.8) / 2.8)[..., None]
+        col = col * (1 - wdr) + tile_at(T_DIRT, wx, wy) * wdr
     col = col.reshape(CELL, SS, CELL, SS, 3).mean((1, 3))
     c8 = np.clip(col, 0, 255).astype(np.uint8); cells["%d_%d" % (x, y)] = c8
     k, c = divmod(n_, NC); cy_, cx_ = divmod(c, PERA)
@@ -216,8 +263,12 @@ for n_, (x, y) in enumerate(baked):
     v0, v1 = (cy_ * CELL) / ATLH + ev, ((cy_ + 1) * CELL) / ATLH - ev
     tiles.append([x, y, SLOT_ATL0 + k, round(u0, 5), round(v1, 5), round(u1, 5), round(v1, 5), round(u0, 5), round(v0, 5), round(u1, 5), round(v0, 5)])
 for x, y in plain: tiles.append([x, y, SLOT_TOP, 0.06, 0.06, 0.14, 0.06, 0.06, 0.14, 0.14, 0.14])
+def _pl(x, y):
+    pts = [(((x % 4) + dx) / 4, 1 - ((y % 4) + dy) / 4) for dx, dy in [(0, 0), (1, 0), (0, 1), (1, 1)]]
+    return [round(float(q), 5) for p in pts for q in p]
+for x, y, dirt in road_plain: tiles.append([x, y, 2 if dirt else 0] + _pl(x, y))
 for k in range(natl):
-    Image.fromarray(atl[k]).quantize(colors=256, method=Image.Quantize.MEDIANCUT, dither=Image.Dither.FLOYDSTEINBERG).save(OUT + "prt_novan%02d.bmp" % (k + 1))
+    Image.fromarray(atl[k]).quantize(colors=256, method=Image.Quantize.MEDIANCUT, dither=Image.Dither.FLOYDSTEINBERG).save(OUT + "prt_novao%02d.bmp" % (k + 1))
 # gat
 gx, gy = np.meshgrid(X0 + (np.arange(2 * NXc) + 0.5) / 2, Y0 + (np.arange(2 * NYc) + 0.5) / 2, indexing="ij")
 gi = np.clip(((gx - X0) * R).astype(int), 0, NX - 1); gj = np.clip(((gy - Y0) * R).astype(int), 0, NY - 1)
@@ -236,11 +287,12 @@ json.dump({"commands": heights}, open(OUT + "an_h.json", "w"), separators=(",", 
 json.dump({"commands": [{"cmd": "tiles", "list": tiles}]}, open(OUT + "an_t.json", "w"), separators=(",", ":"))
 json.dump({"commands": [{"cmd": "gat", "rows": rows}]}, open(OUT + "an_g.json", "w"), separators=(",", ":"))
 # preview: composite of cells + black tops on grass
-pv = np.zeros((NYc * CELL, NXc * CELL, 3), np.uint8); pv[:] = (112, 128, 48)
-for x, y in plain: pv[(NYc - 1 - (y - Y0)) * CELL:(NYc - (y - Y0)) * CELL, (x - X0) * CELL:(x - X0 + 1) * CELL] = 0
+NYv = 110 - Y0
+pv = np.zeros((NYv * CELL, NXc * CELL, 3), np.uint8); pv[:] = (112, 128, 48)
+for x, y in plain: pv[(NYv - 1 - (y - Y0)) * CELL:(NYv - (y - Y0)) * CELL, (x - X0) * CELL:(x - X0 + 1) * CELL] = 0
 for k, c in cells.items():
-    x, y = map(int, k.split("_")); pv[(NYc - 1 - (y - Y0)) * CELL:(NYc - (y - Y0)) * CELL, (x - X0) * CELL:(x - X0 + 1) * CELL] = c
-Image.fromarray(pv).resize((NXc * 16, NYc * 16), Image.LANCZOS).save(OUT + "an_pv.png")
+    x, y = map(int, k.split("_")); pv[(NYv - 1 - (y - Y0)) * CELL:(NYv - (y - Y0)) * CELL, (x - X0) * CELL:(x - X0 + 1) * CELL] = c
+Image.fromarray(pv).resize((NXc * 16, NYv * 16), Image.LANCZOS).save(OUT + "an_pv.png")
 hv = (np.clip(128 - HC / RISE * 100, 0, 255)).astype(np.uint8).T[::-1]
 Image.fromarray(hv).resize((NXc * 8, NYc * 8), Image.NEAREST).save(SCR + "an_hpv.png")
 print("baked", len(baked), "plain", len(plain), "atlases", natl, "hmin", HC.min(), "rows", len(rows))
