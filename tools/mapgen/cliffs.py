@@ -66,6 +66,7 @@ class Contour:
 
 
 KK = 0.2
+TP = 4.5                                            # length over which an end piece tapers to its point
 HO = 8.5                                            # half the clear width of a ramp gap, in cubes
 
 
@@ -210,7 +211,7 @@ class CliffField:
         self.S = S.reshape(shape)
         self.height = self.S * self.step
         self.gd = gd.reshape(shape)
-        ue = np.clip(0.95 * (1.0 - (gd - HO) / 4.5), 0.0, 0.99)
+        ue = np.clip(0.95 * (1.0 - (gd - HO) / TP), 0.0, 0.99)
         self.ue = ue.reshape(shape)
         self.v = ((self.band[0] + self.band[1]) / 2 - (self.band[1] - self.band[0]) * d / self.wt).reshape(shape)             # raw: <0.08 top lip ... >0.92 bottom lip
         u = np.zeros(len(P))
@@ -239,7 +240,7 @@ class CliffField:
         out = {}
         self.dropped = 0
         self.why = {}
-        ho, tp = HO, 4.5
+        ho, tp = HO, TP
         tip = ho + 1.5                                  # where the point of the end piece sits
         for x in range(*x_range):
             for y in range(*y_range):
