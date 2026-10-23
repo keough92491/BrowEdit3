@@ -23,3 +23,12 @@ water, paths, scattered models (trees, rocks), buildings, lights, sounds, effect
 * Cliffs: `terrace_rect()` raises/lowers whole cubes, the height step becomes a wall (`set_wall_texture`).
 * Footprints (`footprint=(w, d)` in cubes) only exist to get a rough GAT; the recalculate command in BrowEdit makes it exact.
 * Lightmaps start empty (no shadows) until BrowEdit3's lightmapper runs.
+
+## Live mode (watch it being built)
+BrowEdit3 watches the folder `claude_link\inbox` next to BrowEdit3.exe (toggle: File -> "Claude live link").
+Drop a command file there and BrowEdit applies it to the open map a little each frame, with normal undo steps.
+`MapGen.save_live(path)` writes a whole generated map as such a file (open a blank map of the same size first).
+Results are written to `claude_link\outbox\<name>.result.json`, `claude_link\status.json` shows that BrowEdit is alive.
+
+Commands: info, camera, textures, heights (+cliff walls), paint (row runs), gat (row runs), models (+smart_gat),
+smart_gat, delete_models, water, save, undo, redo, wait. See `browedit/ClaudeLink.cpp`.

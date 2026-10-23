@@ -76,6 +76,7 @@
     <ClCompile Include="browedit\Lightmapper.cpp" />
     <ClCompile Include="browedit\LightmapperGpu.cpp" />
     <ClCompile Include="browedit\Map.cpp" />
+    <ClCompile Include="browedit\ClaudeLink.cpp" />
     <ClCompile Include="browedit\MapView.Cinematicmode.cpp" />
     <ClCompile Include="browedit\MapView.Colormode.cpp" />
     <ClCompile Include="browedit\MapView.cpp" />

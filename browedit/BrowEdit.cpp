@@ -226,6 +226,7 @@ void BrowEdit::run()
 
 		menuBar();
 		toolbar();
+		claudeLink();
 
 		if (windowData.configVisible)
 			windowData.configVisible = !config.showWindow(this);

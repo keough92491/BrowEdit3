@@ -348,6 +348,8 @@ public:
 	void showObjectTree();
 	void buildObjectTree(Node* node, Map* map);
 	void showObjectEditToolsWindow();
+	void claudeLink();
+	bool claudeLinkEnabled = true;
 	void showObjectProperties();
 	void showUndoWindow();
 	void showObjectWindow();

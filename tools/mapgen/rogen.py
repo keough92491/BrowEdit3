@@ -579,11 +579,11 @@ class MapGen:
         tiles = []
         tile_index = {}
 
-        def tile(tex):
-            key = tex
+        def tile(tex, wall=False):
+            key = (tex, wall)
             if key not in tile_index:
                 tile_index[key] = len(tiles)
-                tiles.append(tex)
+                tiles.append(key)
             return tile_index[key]
 
         cubes = []
@@ -595,11 +595,11 @@ class MapGen:
                 if x < W - 1:
                     a = self._cube_corners(x + 1, y)
                     if abs(h2 - a[0]) > 1e-3 or abs(h4 - a[2]) > 1e-3:
-                        side = tile(wall_tex)
+                        side = tile(wall_tex, True)
                 if y < H - 1:
                     a = self._cube_corners(x, y + 1)
                     if abs(h3 - a[0]) > 1e-3 or abs(h4 - a[1]) > 1e-3:
-                        front = tile(wall_tex)
+                        front = tile(wall_tex, True)
                 # gnd stores heights positive = down
                 cubes.append((-h1, -h2, -h3, -h4, up, front, side))
         return tiles, cubes
@@ -671,8 +671,10 @@ class MapGen:
         g += struct.pack("<iiii", 1, 8, 8, 1)
         g += bytes([255]) * 64 + bytes(192)         # one lightmap: no shadow, no color
         g += struct.pack("<i", len(tiles))
-        uvs = ((0, 1, 0, 1), (0, 0, 1, 1))
-        for tex in tiles:
+        wall_uv = ((0, 1, 0, 1), (0, 0, 1, 1))     # top of a wall at v=0
+        ground_uv = ((0, 1, 0, 1), (1, 1, 0, 0))   # same orientation as BrowEdit's texture fill tool
+        for tex, is_wall in tiles:
+            uvs = wall_uv if is_wall else ground_uv
             g += struct.pack("<4f4f", *uvs[0], *uvs[1])
             g += struct.pack("<hH", tex, 0)
             g += bytes([255, 255, 255, 255])
@@ -741,3 +743,81 @@ class MapGen:
         extra = {"model": extra_models, "light": []}
         open(base + ".rsw.extra.json", "w").write(json.dumps(extra, indent=1))
         return {k: base + k for k in (".rsw", ".gnd", ".gat", ".rsw.extra.json")}
+
+    # ------------------------------------------------------------------ live mode
+    def _rsw_pos(self, u, v, up):
+        return (10.0 * u - 5.0 * self.width, -up, 10.0 * v - 5.0 * self.height)
+
+    @staticmethod
+    def _runs(values, y):
+        """[[y, x0, x1, value], ...] runs of equal values in one row"""
+        out = []
+        start = 0
+        for x in range(1, len(values) + 1):
+            if x == len(values) or values[x] != values[start]:
+                out.append([y, start, x, int(values[start])])
+                start = x
+        return out
+
+    def live_commands(self, smart_gat=True, models_per_command=60, look_at=True):
+        """The whole map as commands for BrowEdit3's live link (open a blank map of the same size first).
+        Write them with save_live(); BrowEdit applies them step by step so the map builds up on screen."""
+        if not self.textures:
+            self.add_texture("backside\\grass.bmp")
+        W, H = self.width, self.height
+        self._update_water_mask()
+        types, _ = self._build_gat()
+        cmds = [{"cmd": "info"}]
+        if look_at:
+            cmds.append({"cmd": "camera", "u": W / 2, "v": H / 2, "distance": max(W, H) * 6})
+        cmds.append({"cmd": "textures", "add": [f for f, _ in self.textures]})
+        # terrain heights (gnd convention: positive = down)
+        data = []
+        for y in range(H):
+            for x in range(W):
+                data.extend(round(-c, 3) for c in self._cube_corners(x, y))
+        hc = {"cmd": "heights", "x0": 0, "y0": 0, "w": W, "h": H, "data": data, "gat": True}
+        if self.wall_tex is not None or (self.terrace != 0).any():
+            hc["wall_texture"] = self.textures[self.wall_tex if self.wall_tex is not None else 0][0]
+        cmds.append(hc)
+        if self.water_level is not None:
+            wp = self.water_params
+            cmds.append({"cmd": "water", "height": -self.water_level, "type": wp["type"], "amplitude": wp["amplitude"],
+                         "wave_speed": wp["wave_speed"], "wave_pitch": wp["wave_pitch"], "anim_speed": wp["anim_speed"]})
+        # textures, one command per texture with row runs
+        for ti, (f, _) in enumerate(self.textures):
+            rows = []
+            for y in range(H):
+                x = 0
+                while x < W:
+                    if self.cube_tex[x, y] == ti:
+                        x1 = x
+                        while x1 < W and self.cube_tex[x1, y] == ti:
+                            x1 += 1
+                        rows.append([y, x, x1])
+                        x = x1
+                    else:
+                        x += 1
+            if rows:
+                cmds.append({"cmd": "paint", "texture": f, "rows": rows})
+        # terrain gat (cliffs, water), models follow with their exact footprint
+        rows = []
+        for gy in range(H * 2):
+            rows.extend(r for r in self._runs([types[gx, gy] for gx in range(W * 2)], gy) if r[3] != 0)
+        if rows:
+            cmds.append({"cmd": "gat", "rows": rows})
+        for i in range(0, len(self.models), models_per_command):
+            items = []
+            for m in self.models[i:i + models_per_command]:
+                up = self.height_at(m.u, m.v) + m.height_offset if m.ground else m.height_offset
+                items.append({"file": m.file, "name": m.name, "pos": [round(c, 3) for c in self._rsw_pos(m.u, m.v, up)],
+                              "rot": list(m.rot), "scale": list(m.scale)})
+            cmds.append({"cmd": "models", "items": items, "smart_gat": bool(smart_gat)})
+        return cmds
+
+    def save_live(self, path, **kw):
+        """Writes the live commands to a json file. Put it in BrowEdit's claude_link\\inbox folder."""
+        os.makedirs(os.path.dirname(os.path.abspath(path)), exist_ok=True)
+        with open(path, "w") as f:
+            json.dump({"commands": self.live_commands(**kw)}, f, separators=(",", ":"))
+        return path

@@ -195,6 +195,7 @@ void BrowEdit::menuBar()
 			std::ofstream mapDataFile("mapdata.json");
 			mapDataFile << std::setw(2) << mapData;
 		}
+		ImGui::MenuItem("Claude live link (claude_link folder)", nullptr, &claudeLinkEnabled);
 		if (ImGui::MenuItem("Texture sheets for Claude..."))
 			openTextureSheetPopup = true;
 		if (ImGui::MenuItem("Export asset catalog (for Claude)"))
