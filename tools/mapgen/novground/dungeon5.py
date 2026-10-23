@@ -115,6 +115,18 @@ def flatten(img, U, V):
     out *= gc_[None, :, None]
     return np.clip(out, 0, 255)
 RKT = flatten(RKT, KU, KV)
+def make_tileable(a):
+    h, w = a.shape[:2]
+    wy_ = np.sin(np.pi * (np.arange(h) + 0.5) / h) ** 2; wx_ = np.sin(np.pi * (np.arange(w) + 0.5) / w) ** 2
+    m = (wy_[:, None] * wx_[None, :])[..., None]
+    r = np.roll(np.roll(a, h // 2, 0), w // 2, 1)
+    return a * m + r * (1 - m)
+_r0, _r1, _c0, _c1 = int(KV[0] * 256), int(KV[1] * 256), int(KU[0] * 256), int(KU[1] * 256)
+RKTILE = make_tileable(RKT[_r0:_r1, _c0:_c1])
+def per_tex(wx, wy, pu, pv, ox=0.0, oy=0.0):
+    h, w = RKTILE.shape[:2]
+    u = (((wx + ox) / pu) % 1.0) * w; v = (1 - (((wy + oy) / pv) % 1.0)) * h
+    return np.stack([ndi.map_coordinates(RKTILE[..., k], [v - 0.5, u - 0.5], order=1, mode="wrap") for k in range(3)], -1)
 def mir(w, g=G):                              # mirrored triangle coordinate in [0,1]
     gi = np.floor(w / g); l = (w - gi * g) / g
     return np.where(gi % 2 == 0, l, 1 - l)
@@ -179,7 +191,9 @@ for n_, (x, y) in enumerate(baked):
     wx = x + FXc; wy = y + FYc
     sd = fld(SD, wx, wy); db = fld(dB, wx, wy); sh = fld(shade_f, wx, wy)
     n1 = fld(nz1, wx, wy); n2 = fld(nz2, wx, wy)
-    fl = tex_at(FL, wx, wy, FU, FV); rk = tex_at(RKT, wx + 0.35 * fld(nz3a, wx, wy), wy + 0.35 * fld(nz3b, wx, wy), KU, KV, 3, 2)      # same texel density as the floor (~60 px per cube)
+    fl = tex_at(FL, wx, wy, FU, FV); rkA = per_tex(wx, wy, 3.0, 2.0); rkB = per_tex(wx, wy, 4.4, 3.0, 1.3, 0.7)
+    mm = smooth(0.5 + 0.55 * fld(nz3a, wx, wy))[..., None]
+    rk = rkA * mm + rkB * (1 - mm)      # same texel density as the floor (~60 px per cube)
     gr = tex_at(GR, wx, wy, (0.0, 1.0), (0.0, 1.0))
     wr = smooth((sd + 0.12 + 0.30 * n1 + 0.10 * n2) / 0.85)             # floor -> rock, ragged natural foot of the wall
     col = fl * (1 - wr[..., None]) + rk * wr[..., None]
