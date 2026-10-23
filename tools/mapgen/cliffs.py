@@ -150,6 +150,7 @@ class CliffField:
         self.wt = wt or w
         self.kk = kk
         self.band = band
+        self.desert = desert
         self.rf, self.rf_u = lens_profile(end_tex, desert, band)
         self.rf_ext_u = np.concatenate([self.rf_u, [0.99]])
         self.rf_ext = np.concatenate([self.rf, [0.0]])
@@ -247,7 +248,7 @@ class CliffField:
                     self.why[(x, y)] = 'excl'
                     continue
                 vr = np.array([self.v[a, b] for a, b in cc])
-                if vr.max() < self.band[0] + 0.12 or vr.min() > self.band[1] + 0.01:
+                if vr.max() < (self.band[0] - 0.01 if self.desert else self.band[0] + 0.12) or vr.min() > self.band[1] + 0.01:
                     continue                      # no rock in this cube
                 clamped = vr.min() < -0.03 or vr.max() > 1.03
                 Ts = np.array([self.T[a, b] for a, b in cc])

@@ -25,7 +25,8 @@ def classify(img):
         rock = (sat < 0.43) & (r < 205)
         m[rock] = ROCK
         m[~rock & (r >= 205)] = DIRT
-        return m
+        from scipy import ndimage as _ndi
+        return _ndi.median_filter(m, size=7, mode='wrap')
     greenish = (g > r + 8) & (g > b + 40)
     mx = np.maximum(np.maximum(r, g), b); mn = np.minimum(np.minimum(r, g), b)
     sat = (mx - mn) / np.maximum(mx, 1)
