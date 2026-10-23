@@ -181,6 +181,36 @@ namespace
 			job.progress = rows.size() ? (float)job.cursor / rows.size() : 1.0f;
 			return job.cursor >= rows.size();
 		}
+		else if (name == "tiles")
+		{	// per cube tiles with their own UVs: [x, y, texture index, u1,v1, u2,v2, u3,v3, u4,v4] (corners h1..h4)
+			const auto& list = cmd["list"];
+			auto ga = new GroupAction("Claude: tiles");
+			int id = (int)gnd->tiles.size();
+			size_t end = std::min(list.size(), job.cursor + 150);
+			for (size_t r = job.cursor; r < end; r++)
+			{
+				const auto& e = list[r];
+				int x = e[0], y = e[1];
+				if (!gnd->inMap(glm::ivec2(x, y)))
+					continue;
+				int tex = e[2];
+				if (tex < 0 || tex >= (int)gnd->textures.size())
+					continue;
+				auto cube = gnd->cubes[x][y];
+				auto t = newTile(tex, false);
+				t->v1 = glm::vec2(e[3].get<float>(), e[4].get<float>());
+				t->v2 = glm::vec2(e[5].get<float>(), e[6].get<float>());
+				t->v3 = glm::vec2(e[7].get<float>(), e[8].get<float>());
+				t->v4 = glm::vec2(e[9].get<float>(), e[10].get<float>());
+				ga->addAction(new TileNewAction(t));
+				ga->addAction(new CubeTileChangeAction(glm::ivec2(x, y), cube, id, cube->tileFront, cube->tileSide));
+				id++;
+			}
+			map->doAction(ga, browEdit);
+			job.cursor = end;
+			job.progress = list.size() ? (float)job.cursor / list.size() : 1.0f;
+			return job.cursor >= list.size();
+		}
 		else if (name == "heights")
 		{
 			int x0 = cmd["x0"], y0 = cmd["y0"], w = cmd["w"], h = cmd["h"];
