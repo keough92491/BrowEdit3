@@ -5,7 +5,7 @@ import json, os, shutil, numpy as np
 from PIL import Image
 SCR = "/tmp/claude-0/-home-claude/bcc60026-74cc-55ec-960a-59e929b4c57f/scratchpad/"
 OUT = "/mnt/user-data/outputs/"
-X0, Y0, NX, NY = 147, 141, 37, 57                      # window cubes x147..183, y141..197
+X0, Y0, NX, NY = 139, 141, 52, 57                      # global grid x139..190, y141..197
 BX0, BX1, BY0, BY1 = 148, 183, 143, 197                # rock block (inclusive)
 KX, KY = 36.0 / 900.0, 54.0 / 1310.0
 cx2x = lambda c: 148 + (c - 40) * KX * 35.0 / 36.0 * 36.0 / 35.0
@@ -23,6 +23,22 @@ rooms = {                                          # name: (rect, rounded)
     "mid_right": (R(790, 540, 912, 680), True),
     "bottom_hall": (R(75, 958, 908, 1072), True),
 }
+BL = [(425, 100, 780, 265), (853, 70, 1187, 220), (757, 117, 895, 687), (502, 323, 675, 615), (887, 310, 1138, 503),
+      (481, 636, 773, 763), (874, 636, 1131, 752), (500, 698, 598, 868), (1054, 678, 1147, 865)]
+def bl(p): x0, y0, x1, y1 = p; return (148 + (x0 - 545) / 16.39, 198 - (y1 - 15) / 16.39, 148 + (x1 - 545) / 16.39, 198 - (y0 - 15) / 16.39)
+for i, p in enumerate(BL): rooms["blue%d" % i] = (bl(p), i in (0, 1, 3, 4, 7, 8))
+cliffM = np.zeros((200, 200), bool)
+for c in json.load(open(OUT + "cl15.json"))["commands"]:
+    if c["cmd"] == "heights":
+        a = np.array(c["data"]).reshape(c["h"], c["w"], 4)
+        for j in range(c["h"]):
+            for i in range(c["w"]):
+                if np.abs(a[j, i]).max() > 0.01: cliffM[c["x0"] + i, c["y0"] + j] = True
+from scipy import ndimage as ndi
+forb2 = ndi.binary_dilation(cliffM, iterations=2)[X0:X0 + NX, Y0:Y0 + NY]
+forb3 = ndi.binary_dilation(cliffM, iterations=3)[X0:X0 + NX, Y0:Y0 + NY]
+gxx = (np.arange(NX)[:, None] + X0) * np.ones((1, NY)); gyy = (np.arange(NY)[None, :] + Y0) * np.ones((NX, 1))
+outside_ok = ((gxx >= 145) & (gxx <= 185)) | (gyy >= 180)          # cubes outside the main window only above y180 (cliff-free there)
 floor = np.zeros((NX, NY), bool)
 def paint(mask, rect, rounded, minw=3):
     x0, y0, x1, y1 = rect
@@ -37,6 +53,7 @@ def paint(mask, rect, rounded, minw=3):
             i, j = x - X0, y - Y0
             if 0 <= i < NX and 0 <= j < NY: mask[i, j] = True
 for nm, (rect, rd) in rooms.items(): paint(floor, rect, rd)
+floor &= ~forb3 & outside_ok
 # exit: spine runs on through the rock block's south wall to the grass
 sx = int(round(cx2x(432))) - 1
 for x in range(sx, sx + 3):
@@ -48,7 +65,8 @@ for x in range(BX0, BX1 + 1):
         ex = min(x - BX0, BX1 - x); ey = min(y - BY0, BY1 - y)
         if ex + ey < 3 and not (ex >= 3 or ey >= 3): continue
         block[x - X0, y - Y0] = True
-block |= floor & (np.arange(NY)[None, :] + Y0 >= BY0 - 0)       # floor inside the block rows stays part of the block outline for rock fill
+block = block | ndi.binary_dilation(floor, structure=np.ones((3, 3), bool), iterations=3)
+block &= ~forb2 & outside_ok
 rock = block & ~floor
 # sunken centre channel (1 cube) along the spine and the two middle arms, interrupted by plazas at the junctions
 chan = np.zeros((NX, NY), bool)
@@ -69,11 +87,18 @@ for x in range(cube_of_cx(130), cube_of_cx(195) + 1):
         if floor[x - X0, y - Y0] and not chan[x - X0, y - Y0]: pad[x - X0, y - Y0] = True
 # heights (positive = down): rock -40, channel +10
 Hc = np.zeros((NX, NY)); Hc[rock] = -40.0; Hc[chan] = 10.0
-data = []
-for j in range(NY):
-    for i in range(NX):
-        h = float(Hc[i, j]); data += [h, h, h, h]
-heights = {"cmd": "heights", "x0": X0, "y0": Y0, "w": NX, "h": NY, "gat": True, "wall_texture": "prt\\prt_novsw01.bmp", "data": data}
+def win(xa, xb, ya, yb):                               # inclusive cube window -> heights command
+    d = []
+    for y in range(ya, yb + 1):
+        for x in range(xa, xb + 1):
+            h = float(Hc[x - X0, y - Y0]); d += [h, h, h, h]
+    return {"cmd": "heights", "x0": xa, "y0": ya, "w": xb - xa + 1, "h": yb - ya + 1, "gat": True, "wall_texture": "prt\\prt_novsw01.bmp", "data": d}
+hcmds = [win(145, 185, 141, 197), win(139, 146, 178, 197), win(184, 190, 178, 197)]
+# safety: nothing nonzero outside the three windows, and no cliff cube inside any window
+tot = sum(np.count_nonzero(Hc[(c["x0"] - X0):(c["x0"] - X0 + c["w"]), (c["y0"] - Y0):(c["y0"] - Y0 + c["h"])]) for c in hcmds)
+assert np.count_nonzero(Hc) <= tot
+for c in hcmds:
+    assert not cliffM[c["x0"]:c["x0"] + c["w"], c["y0"]:c["y0"] + c["h"]].any(), "window hits a cliff"
 # tiles
 G = 4
 def pl(x, y):
@@ -98,7 +123,7 @@ for yy in range(2 * NY):
             if q != p + 1: rows.append([2 * Y0 + yy, 2 * X0 + int(s), 2 * X0 + int(p) + 1, typ]); s = q
             p = q
         rows.append([2 * Y0 + yy, 2 * X0 + int(s), 2 * X0 + int(p) + 1, typ])
-json.dump({"commands": [heights]}, open(OUT + "ur_h.json", "w"), separators=(",", ":"))
+json.dump({"commands": hcmds}, open(OUT + "ur_h.json", "w"), separators=(",", ":"))
 json.dump({"commands": [{"cmd": "tiles", "list": tiles}]}, open(OUT + "ur_t.json", "w"), separators=(",", ":"))
 json.dump({"commands": [{"cmd": "gat", "rows": rows}]}, open(OUT + "ur_g.json", "w"), separators=(",", ":"))
 # texture copies from the original prt_sewb1 export (floor 03, channel 01, pad 04)
