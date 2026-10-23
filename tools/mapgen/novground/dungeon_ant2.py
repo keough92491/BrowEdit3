@@ -1,5 +1,5 @@
 """Lower-right ant-nest dungeon, UL-style: smooth cave slopes, black rock ceiling, baked atlases (antflat floor + moss/mine rock).
-Layout traced from the user's 'Ant Nest' guide.  Writes an_h/an_g/an_t json + prt_novai%02d.bmp, preview an_pv.png."""
+Layout traced from the user's 'Ant Nest' guide.  Writes an_h/an_g/an_t json + prt_novaj%02d.bmp, preview an_pv.png."""
 import json, os, numpy as np
 from PIL import Image, ImageDraw
 from scipy import ndimage as ndi
@@ -45,7 +45,7 @@ _ok = (_ipx >= 0) & (_ipx < _lm.shape[1]) & (_ipy >= 0) & (_ipy < _lm.shape[0])
 _cm = np.zeros((NX, NY), bool); _cm[_ok] = _lm[_ipy[_ok], _ipx[_ok]] > 0
 floor_core0 = floor_core0 | _cm
 _ci = Image.fromarray((floor_core0[:, ::-1].T * 255).astype(np.uint8)); d = ImageDraw.Draw(_ci); img = _ci
-_P = [to_px(*p) for p in [(158.4, 72.5), (158.5, 64.0)]]; d.line(_P, fill=255, width=int(3.8 * R), joint="curve")
+_P = [to_px(*p) for p in [(158.4, 72.5), (158.5, 64.0)]]; d.line(_P, fill=255, width=int(4.2 * R), joint="curve")
 _F = [(156.5, 69.0), (160.5, 69.0), (160.9, 65.6), (162.6, 63.4), (166.5, 60.6), (151.0, 60.6), (154.0, 63.6), (155.9, 65.8)]
 d.polygon([to_px(*p) for p in _F], fill=255)
 floor0 = np.array(img)[::-1].T > 127
@@ -144,6 +144,11 @@ Zf = -Hf / 10.0; gzx, gzy = np.gradient(Zf, 1.0 / R); nrm = np.sqrt(gzx ** 2 + g
 Lv = np.array([-0.45, 0.55, 0.70]); Lv /= np.linalg.norm(Lv)
 shade_f = 1 + 0.6 * ((-gzx * Lv[0] - gzy * Lv[1] + Lv[2]) / nrm - Lv[2])
 def fld(a, wx, wy): return ndi.map_coordinates(a, [(wx - X0) * R - 0.5, (wy - Y0) * R - 0.5], order=1, mode="nearest")
+_zi = Image.new("L", (NX, NY), 0); _zd = ImageDraw.Draw(_zi)
+for _poly in ([(150.5, 76), (155.8, 76), (155.8, 61.1), (143, 54.5), (138, 56), (140.2, 59.5), (147, 64), (150.5, 67.5)],
+              [(161.2, 76), (166.5, 76), (166.5, 70), (172, 64.5), (180, 62), (181, 57), (176.6, 54.5), (161.2, 61.1)]):
+    _zd.polygon([to_px(*p) for p in _poly], fill=255)
+zoneE = ndi.gaussian_filter((np.array(_zi)[::-1].T > 127).astype(float), 0.35 * R)
 nz1 = nz(0.5); nz2 = nz(0.25); nz3a = nz(2.2); nzf = nz(1.6)
 smooth = S_
 glows = []
@@ -184,6 +189,7 @@ for n_, (x, y) in enumerate(baked):
     col = fl * (1 - wr[..., None]) + rk * wr[..., None]
     dfo = np.clip(fld(dF, wx, wy), 0, None); se = fld(SE, wx, wy)
     wb = smooth((dfo - 2.0) / 1.0) * smooth((db - 1.3) / 1.4)
+    wb = np.maximum(wb, fld(zoneE, wx, wy) * smooth((sd + 0.15) / 0.5))
     col = col * (1 - wb[..., None])
     ao = 1 - 0.45 * np.exp(-((sd - 0.30) / 0.75) ** 2)
     col = col * ao[..., None] * np.clip(sh, 0.62, 1.25)[..., None]
@@ -203,7 +209,7 @@ for n_, (x, y) in enumerate(baked):
     tiles.append([x, y, SLOT_ATL0 + k, round(u0, 5), round(v1, 5), round(u1, 5), round(v1, 5), round(u0, 5), round(v0, 5), round(u1, 5), round(v0, 5)])
 for x, y in plain: tiles.append([x, y, SLOT_TOP, 0.06, 0.06, 0.14, 0.06, 0.06, 0.14, 0.14, 0.14])
 for k in range(natl):
-    Image.fromarray(atl[k]).quantize(colors=256, method=Image.Quantize.MEDIANCUT, dither=Image.Dither.FLOYDSTEINBERG).save(OUT + "prt_novai%02d.bmp" % (k + 1))
+    Image.fromarray(atl[k]).quantize(colors=256, method=Image.Quantize.MEDIANCUT, dither=Image.Dither.FLOYDSTEINBERG).save(OUT + "prt_novaj%02d.bmp" % (k + 1))
 # gat
 gx, gy = np.meshgrid(X0 + (np.arange(2 * NXc) + 0.5) / 2, Y0 + (np.arange(2 * NYc) + 0.5) / 2, indexing="ij")
 gi = np.clip(((gx - X0) * R).astype(int), 0, NX - 1); gj = np.clip(((gy - Y0) * R).astype(int), 0, NY - 1)
