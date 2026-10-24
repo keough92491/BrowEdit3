@@ -52,9 +52,16 @@ namespace
 			}
 			else if (auto l = n->getComponent<RswLight>())
 			{
-				mix(h, &o->position, sizeof(glm::vec3)); mix(h, &l->color, sizeof(glm::vec3)); mix(h, &l->range, sizeof(float));
-				mix(h, &l->enabled, sizeof(bool)); mix(h, &l->direction, sizeof(glm::vec3)); mix(h, &l->lightType, sizeof(l->lightType));
-				mix(h, &l->affectLightmap, sizeof(bool)); mix(h, &l->givesShadow, sizeof(bool)); mix(h, &l->spotlightWidth, sizeof(float));
+				// every option shown in the light's property panel
+				mix(h, &o->position, sizeof(glm::vec3)); mix(h, &o->rotation, sizeof(glm::vec3)); mix(h, &o->scale, sizeof(glm::vec3));
+				mix(h, &l->color, sizeof(glm::vec3)); mix(h, &l->range, sizeof(float));
+				mix(h, &l->enabled, sizeof(bool)); mix(h, &l->diffuseLighting, sizeof(bool)); mix(h, &l->lightType, sizeof(l->lightType));
+				mix(h, &l->givesShadow, sizeof(bool)); mix(h, &l->affectShadowMap, sizeof(bool)); mix(h, &l->affectLightmap, sizeof(bool));
+				mix(h, &l->shadowTerrain, sizeof(bool)); mix(h, &l->noTerrainShading, sizeof(bool));
+				mix(h, &l->sunMatchRswDirection, sizeof(bool)); mix(h, &l->direction, sizeof(glm::vec3)); mix(h, &l->spotlightWidth, sizeof(float));
+				mix(h, &l->falloffStyle, sizeof(l->falloffStyle)); mix(h, &l->cutOff, sizeof(float)); mix(h, &l->intensity, sizeof(float));
+				mix(h, &l->minShadowDistance, sizeof(float));
+				if (!l->falloff.empty()) mix(h, l->falloff.data(), l->falloff.size() * sizeof(glm::vec2));
 			}
 		});
 		return h;
