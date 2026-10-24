@@ -63,6 +63,7 @@
     <ClCompile Include="browedit\components\SkyMapRenderer.cpp" />
     <ClCompile Include="browedit\components\Str.cpp" />
     <ClCompile Include="browedit\components\StrRenderer.cpp" />
+    <ClCompile Include="browedit\components\SprRenderer.cpp" />
     <ClCompile Include="browedit\components\WaterRenderer.cpp" />
     <ClCompile Include="browedit\Config.cpp" />
     <ClCompile Include="browedit\Gadget.cpp" />
@@ -240,6 +241,7 @@
     <ClInclude Include="browedit\components\SkyMapRenderer.h" />
     <ClInclude Include="browedit\components\Str.h" />
     <ClInclude Include="browedit\components\StrRenderer.h" />
+    <ClInclude Include="browedit\components\SprRenderer.h" />
     <ClInclude Include="browedit\components\WaterRenderer.h" />
     <ClInclude Include="browedit\Config.h" />
     <ClInclude Include="browedit\Gadget.h" />

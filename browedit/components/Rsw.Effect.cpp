@@ -12,6 +12,7 @@
 #include <browedit/components/LubRenderer.h>
 #include <browedit/components/LubWindRenderer.h>
 #include <browedit/components/StrRenderer.h>
+#include <browedit/components/SprRenderer.h>
 #include <browedit/components/EvilsPawRenderer.h>
 #include <browedit/actions/AddComponentAction.h>
 #include <browedit/actions/RemoveComponentAction.h>
@@ -541,12 +542,38 @@ void attachEffectPreview(Node* node)
 		}
 		catch (...) { std::cerr << "effectstr.json not loaded" << std::endl; }
 	}
+	static std::map<int, std::string> sprTable;
+	static bool sprLoaded = false;
+	if (!sprLoaded)
+	{
+		sprLoaded = true;
+		try {
+			auto j = util::FileIO::getJson("data\\effectspr.json");
+			for (auto it = j.begin(); it != j.end(); ++it)
+				sprTable[std::stoi(it.key())] = util::utf8_to_iso_8859_1(it.value().get<std::string>());
+		}
+		catch (...) { std::cerr << "effectspr.json not loaded" << std::endl; }
+	}
 	auto e = node->getComponent<RswEffect>();
-	if (!e || node->getComponent<StrEffect>() || node->getComponent<LubEffect>() || node->getComponent<LubWindEffect>() || node->getComponent<EvilsPawEffect>())
+	if (!e || node->getComponent<StrEffect>() || node->getComponent<SprEffect>() || node->getComponent<LubEffect>() || node->getComponent<LubWindEffect>() || node->getComponent<EvilsPawEffect>())
 		return;
 	auto it = table.find(e->id);
 	if (it == table.end())
+	{
+		auto sp = sprTable.find(e->id);
+		if (sp != sprTable.end())
+		{
+			std::string base = "data\\sprite\\\xC0\xCC\xC6\xD1\xC6\xAE\\" + sp->second;
+			if (util::FileIO::exists(base + ".spr") && util::FileIO::exists(base + ".act"))
+			{
+				auto se = new SprEffect();
+				se->file = sp->second;
+				node->addComponent(se);
+				node->addComponent(new SprRenderer());
+			}
+		}
 		return;
+	}
 	std::string f = it->second;
 	for (size_t p; (p = f.find("%d")) != std::string::npos;)
 		f.replace(p, 2, "1");
