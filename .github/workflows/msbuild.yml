@@ -41,7 +41,13 @@ jobs:
       working-directory: ${{env.GITHUB_WORKSPACE}}
       # Add additional options to the MSBuild command line here (like platform or verbosity level).
       # See https://docs.microsoft.com/visualstudio/msbuild/msbuild-command-line-reference
-      run: msbuild /m /p:Configuration=${{env.BUILD_CONFIGURATION}} ${{env.SOLUTION_FILE_PATH}}
+      run: msbuild /m /p:Configuration=${{env.BUILD_CONFIGURATION}} ${{env.SOLUTION_FILE_PATH}} /flp:logfile=build_errors.log;errorsonly;verbosity=quiet
+
+    - name: Report build errors
+      if: failure()
+      shell: pwsh
+      run: |
+        if (Test-Path build_errors.log) { Get-Content build_errors.log | Select-Object -Unique | Select-Object -First 15 | ForEach-Object { Write-Host "::error::$($_ -replace '%','%25')" } }
     
     - name: BuildPackage
       run: |
