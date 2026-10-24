@@ -560,7 +560,7 @@ void attachEffectPreview(Node* node)
 	if (e->id == 44)	// EF_SMOKE is drawn by client code, not from a file: approximate it with a soft smoke emitter
 	{
 		auto le = new LubEffect();
-		le->texture = "smoke2.bmp";
+		le->texture = "effect\\smoke.tga";
 		le->gravity = glm::vec3(0, -1.5f, 0);
 		le->color = glm::vec4(0.8f, 0.8f, 0.8f, 0.5f);
 		le->rate = glm::vec2(2, 4);
