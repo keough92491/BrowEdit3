@@ -478,6 +478,7 @@ void BrowEdit::menuBar()
 		hotkeyMenuItem("Calculate Quadtree", HotkeyAction::Global_CalculateQuadtree);
 		hotkeyMenuItem("Calculate lightmaps", HotkeyAction::Global_CalculateLightmaps);
 		ImGui::MenuItem("Live lightmap (re-bake on edits)", nullptr, &liveLightmap);
+			if (liveLightmap) { ImGui::SetNextItemWidth(120); ImGui::SliderFloat("Live delay (s)", &liveLightmapDelay, 0.0f, 1.0f, "%.2f"); }
 		if (ImGui::MenuItem("Make tiles unique"))
 			activeMapView->map->rootNode->getComponent<Gnd>()->makeTilesUnique();
 		if (ImGui::MenuItem("Clean unused tiles"))

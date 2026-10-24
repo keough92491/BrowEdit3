@@ -150,7 +150,7 @@ void BrowEdit::liveLightmapUpdate()
 		s.wasOn = true; s.map = map;
 		s.lastStamp = mapStamp(map); s.lastChange = now - 100; s.pending = true; s.lastCheck = now;
 	}
-	else if (now - s.lastCheck >= 0.1)
+	else if (now - s.lastCheck >= 0.03)
 	{
 		s.lastCheck = now;
 		size_t st = mapStamp(map);
@@ -159,9 +159,9 @@ void BrowEdit::liveLightmapUpdate()
 	if (!s.pending || now - s.lastChange < liveLightmapDelay)
 		return;
 	// adaptive throttle: never spend more than ~1/3 of the time baking, whatever the map size
-	if (now - s.lastBakeEnd < glm::max((double)liveLightmapDelay, 2.0 * s.lastBakeTime))
+	if (now - s.lastBakeEnd < s.lastBakeTime)
 		return;
-	if (ImGui::IsMouseDown(ImGuiMouseButton_Left) && now - s.lastChange < 100)
+	if (s.lastBakeTime > 0.25 && ImGui::IsMouseDown(ImGuiMouseButton_Left) && now - s.lastChange < 100)
 		return; // wait for the end of a drag
 	s.pending = false;
 	s.baking = true;
