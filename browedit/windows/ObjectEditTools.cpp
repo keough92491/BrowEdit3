@@ -66,6 +66,18 @@ void BrowEdit::showObjectEditToolsWindow()
 	hotkeyButton("Randomize Z rotation", HotkeyAction::ObjectEdit_RandomZRotation);
 
 	ImGui::Separator();
+	ImGui::Checkbox("Random scale on place", &randomScaleOnPlace);
+	if (ImGui::IsItemHovered())
+		ImGui::SetTooltip("Each single model you place (trees, bushes...) gets a random uniform scale between min and max.");
+	if (randomScaleOnPlace)
+	{
+		ImGui::DragFloat("Scale min", &randomScaleMin, 0.01f, 0.1f, 5.0f);
+		ImGui::DragFloat("Scale max", &randomScaleMax, 0.01f, 0.1f, 5.0f);
+	}
+	ImGui::Checkbox("Random Y rotation on place", &randomRotYOnPlace);
+	if (ImGui::IsItemHovered())
+		ImGui::SetTooltip("Each single model you place gets a random rotation around the vertical (green) axis, 0-360.");
+	ImGui::Separator();
 	ImGui::Checkbox("Smart model GAT", &autoGatOnPlace);
 	if (ImGui::IsItemHovered())
 		ImGui::SetTooltip("Placing a model marks the GAT tiles under its ground contact area as not walkable.\nMoving, rotating, scaling or nudging it moves those tiles along, deleting it gives them back.\nTiles you edited by hand are left alone. Every step is one undo.\nOnly models placed with this ticked are followed.");

@@ -178,6 +178,22 @@ void MapView::postRenderObjectMode(BrowEdit* browEdit)
 		if (ImGui::IsMouseClicked(0))
 		{
 			canSelectObject = false;
+			if (browEdit->newNodes.size() == 1 && (browEdit->randomScaleOnPlace || browEdit->randomRotYOnPlace))
+			{
+				auto n0 = browEdit->newNodes[0].first;
+				auto o0 = n0->getComponent<RswObject>();
+				if (o0 && n0->getComponent<RswModel>())
+				{
+					if (browEdit->randomScaleOnPlace)
+					{
+						float lo = glm::min(browEdit->randomScaleMin, browEdit->randomScaleMax), hi = glm::max(browEdit->randomScaleMin, browEdit->randomScaleMax);
+						float f = lo + (hi - lo) * (rand() / (float)RAND_MAX);
+						o0->scale = glm::vec3(f);
+					}
+					if (browEdit->randomRotYOnPlace)
+						o0->rotation.y = 360.0f * (rand() / (float)RAND_MAX);
+				}
+			}
 			auto ga = new GroupAction("Pasting " + std::to_string(browEdit->newNodes.size()) + " objects");
 			bool first = false;
 			for (auto newNode : browEdit->newNodes)
