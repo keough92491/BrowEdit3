@@ -1,4 +1,3 @@
-#include <Windows.h>
 #include "SprRenderer.h"
 #include <browedit/util/ResourceManager.h>
 #include <browedit/util/FileIO.h>
