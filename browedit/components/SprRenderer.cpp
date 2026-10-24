@@ -241,14 +241,15 @@ void SprRenderer::render(NodeRenderContext& context)
 	shader->setUniform(SprShader::Uniforms::modelMatrix, modelMatrix);
 
 	float ps = sprEffect->pixelSize;
+	glm::vec2 os(glm::abs(rswObject->scale.x), glm::abs(rswObject->scale.y));	// the object's Scale in the properties window
 	for (auto& l : motion.layers)
 	{
 		auto tex = sprAct->texture(l);
 		auto im = sprAct->image(l);
 		if (!tex || !im)
 			continue;
-		float hw = im->w * 0.5f * l.scale.x * ps, hh = im->h * 0.5f * l.scale.y * ps;
-		float cx = l.x * ps, cy = -l.y * ps;
+		float hw = im->w * 0.5f * l.scale.x * ps * os.x, hh = im->h * 0.5f * l.scale.y * ps * os.y;
+		float cx = l.x * ps * os.x, cy = -l.y * ps * os.y;
 		float ca = cosf(glm::radians(-l.rotation)), sa = sinf(glm::radians(-l.rotation));
 		float u0 = l.mirror ? 1.0f : 0.0f, u1 = l.mirror ? 0.0f : 1.0f;
 		const float cs[4][4] = { {-hw, -hh, u0, 1}, {-hw, hh, u0, 0}, {hw, hh, u1, 0}, {hw, -hh, u1, 1} };

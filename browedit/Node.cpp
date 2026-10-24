@@ -264,6 +264,7 @@ void Node::addComponentsFromJson(const nlohmann::json& data)
 			this->addComponent(new CubeCollider(5));
 		}
 	}
+	attachEffectPreview(this);	// sprite previews are not serialized, rebuild them after paste
 }
 
 
