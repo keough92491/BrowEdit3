@@ -63,6 +63,14 @@ namespace sprite
 		j["action"] = action; j["direction"] = dir; j["speed"] = speed; j["scale"] = scale;
 		j["position"] = { pos.x, pos.y, pos.z }; j["elevation"] = elevation;
 		j["visible"] = visible; j["locked"] = locked;
+		{
+			nlohmann::json m;
+			m["enabled"] = pathEnabled; m["mode"] = pathMode; m["speed"] = moveSpeed; m["wait"] = waitTime; m["delay"] = startDelay;
+			m["faceMovement"] = faceMove; m["syncAnimation"] = syncAnim; m["walkAction"] = walkAction; m["wanderRadius"] = wanderRadius;
+			m["waypoints"] = nlohmann::json::array();
+			for (auto& p : path) m["waypoints"].push_back({ p.x, p.y, p.z });
+			j["movement"] = m;
+		}
 		j["editorOnly"] = true;	// never an NPC in the game
 		return j;
 	}
@@ -89,6 +97,14 @@ namespace sprite
 		if (j.contains("position")) i.pos = glm::vec3(j["position"][0], j["position"][1], j["position"][2]);
 		i.elevation = j.value("elevation", 0.0f);
 		i.visible = j.value("visible", true); i.locked = j.value("locked", false);
+		if (j.contains("movement"))
+		{
+			auto& m = j["movement"];
+			i.pathEnabled = m.value("enabled", true); i.pathMode = m.value("mode", 1); i.moveSpeed = m.value("speed", 4.0f); i.waitTime = m.value("wait", 1.0f);
+			i.startDelay = m.value("delay", 0.0f); i.faceMove = m.value("faceMovement", true); i.syncAnim = m.value("syncAnimation", true);
+			i.walkAction = m.value("walkAction", 1); i.wanderRadius = m.value("wanderRadius", 0.0f);
+			if (m.contains("waypoints")) for (auto& p : m["waypoints"]) i.path.push_back(glm::vec3(p[0], p[1], p[2]));
+		}
 		return i;
 	}
 
@@ -260,20 +276,23 @@ namespace sprite
 			a.robe == b.robe && a.weapon == b.weapon && a.shield == b.shield && a.customWing == b.customWing && memcmp(a.wingOff, b.wingOff, sizeof(a.wingOff)) == 0;
 	}
 
-	std::shared_ptr<Frame> System::Impl::frameFor(System& s, const Instance& in, int effDir, double time, AnimInfo* infoOut)
+	std::shared_ptr<Frame> System::Impl::frameFor(System& s, const Instance& in, int effDir, double time, AnimInfo* infoOut, int actionOverride, float speedMul)
 	{
-		if (!in.rtValid || !sameCfg(in.cfg, in.rtCfg) || in.rtAction != in.action || in.rtDir != effDir)
+		int act = actionOverride >= 0 ? actionOverride : in.action;
+		if (!in.rtValid || !sameCfg(in.cfg, in.rtCfg) || in.rtAction != act || in.rtDir != effDir)
 		{
-			in.rtCfg = in.cfg; in.rtKey = in.cfg.key(); in.rtAction = in.action; in.rtDir = effDir; in.rtValid = true;
-			in.rtInfo = s.composer.info(in.cfg, in.action, effDir);
+			in.rtCfg = in.cfg; in.rtKey = in.cfg.key(); in.rtDir = effDir; in.rtValid = true;
+			in.rtInfo = s.composer.info(in.cfg, act, effDir);
+			if (!in.rtInfo.valid && act != in.action) { act = in.action; in.rtInfo = s.composer.info(in.cfg, act, effDir); }	// no such action for this sprite
+			in.rtAction = act;
 			in.rtFrames.assign(in.rtInfo.valid ? in.rtInfo.frames : 0, nullptr);
 		}
 		if (infoOut) *infoOut = in.rtInfo;
 		if (!in.rtInfo.valid) return nullptr;
-		int fi = (int)(time * 1000.0 * std::max(0.01f, in.speed) / in.rtInfo.ms) % in.rtInfo.frames;
+		int fi = (int)(time * 1000.0 * std::max(0.01f, in.speed * speedMul) / in.rtInfo.ms) % in.rtInfo.frames;
 		if (fi < 0) fi = 0;
 		auto& f = in.rtFrames[fi];
-		if (!f) f = s.composer.frame_(in.cfg, in.rtKey, in.action, effDir, fi);
+		if (!f) f = s.composer.frame_(in.cfg, in.rtKey, in.rtAction, effDir, fi);
 		return f;
 	}
 
@@ -340,6 +359,86 @@ namespace sprite
 		return (((dir + 4 - steps) % 8) + 8) % 8;
 	}
 
+	// ------------------------------------------------------------------ movement
+	struct Pose { glm::vec3 world; int action; int dir; float mul; };
+
+	static float hash01(uint32_t x) { x ^= x >> 16; x *= 0x7feb352du; x ^= x >> 15; x *= 0x846ca68bu; x ^= x >> 16; return (x & 0xFFFFFF) / 16777216.0f; }
+	static int dirOf(float dx, float dz) { int s = (int)lroundf(glm::degrees(atan2f(-dx, dz)) / 45.0f); return ((s % 8) + 8) % 8; }
+
+	static bool walkableAt(Map* map, float x, float z)
+	{
+		auto gat = map->rootNode->getComponent<Gat>();
+		if (!gat) return true;
+		int cx = (int)floorf(x / 5.0f), cy = (int)floorf((5.0f * gat->height + 10.0f - z) / 5.0f);
+		if (cx < 0 || cy < 0 || cx >= gat->width || cy >= gat->height) return false;
+		int t = gat->cubes[cx][cy]->gatType;
+		return t == 0 || t == 3 || t == 6;
+	}
+
+	struct Leg { glm::vec3 a, b; double t, wait; };
+
+	static Pose poseOf(System& sys, Map* map, Gnd* gnd, const Instance& in, double now, bool frozen)
+	{
+		glm::vec3 home = toWorld(in.pos, gnd);
+		Pose p{ home, in.action, in.dir, 1.0f };
+		double tt = now - sys.pathEpoch - in.startDelay;
+		if (!sys.previewMovement || frozen || !in.pathEnabled || tt < 0) return p;
+		const float speed = std::max(0.5f, in.moveSpeed) * 5.0f;	// world units per second
+		std::vector<Leg> legs;
+		bool repeat = true;
+		if (!in.path.empty())
+		{
+			std::vector<glm::vec3> pts{ home };
+			for (auto& w : in.path) pts.push_back(toWorld(w, gnd));
+			if (in.pathMode == 1) pts.push_back(home);
+			else if (in.pathMode == 2) for (int i = (int)pts.size() - 2; i >= 0; i--) pts.push_back(pts[i]);
+			repeat = in.pathMode != 0;
+			for (size_t i = 0; i + 1 < pts.size(); i++) legs.push_back({ pts[i], pts[i + 1], glm::length(glm::vec2(pts[i + 1].x - pts[i].x, pts[i + 1].z - pts[i].z)) / speed, in.waitTime });
+		}
+		else if (in.wanderRadius > 0.01f)
+		{
+			glm::vec3 cur = home; double acc = 0;
+			uint32_t seed = (uint32_t)in.id * 7919u + 13u;
+			for (int k = 0; k < 400 && acc < 600; k++)
+			{
+				glm::vec3 target = cur; bool found = false;
+				for (int tryN = 0; tryN < 5 && !found; tryN++)
+				{
+					float ang = hash01(seed++) * 6.2831853f, r = in.wanderRadius * 5.0f * sqrtf(hash01(seed++));
+					glm::vec3 c(home.x + cosf(ang) * r, home.y, home.z + sinf(ang) * r);
+					if (walkableAt(map, c.x, c.z)) { target = c; found = true; }
+				}
+				double w = in.waitTime * (0.3 + 1.4 * hash01(seed++)) + 0.3;
+				double lt = glm::length(glm::vec2(target.x - cur.x, target.z - cur.z)) / speed;
+				legs.push_back({ cur, target, lt, w });
+				acc += lt + w; cur = target;
+			}
+			legs.push_back({ cur, home, glm::length(glm::vec2(home.x - cur.x, home.z - cur.z)) / speed, 0.0 });
+		}
+		if (legs.empty()) return p;
+		double cyc = 0; for (auto& l : legs) cyc += l.t + l.wait;
+		auto place = [&](glm::vec3 w, int dir, bool moving)
+		{
+			float y; if (surfaceHeight(map, gnd, sys.snapToGat, w.x, w.z, y)) w.y = y;
+			p.world = w;
+			if (in.faceMove) p.dir = dir;
+			if (moving) { p.action = in.walkAction; if (in.syncAnim) p.mul = glm::clamp(in.moveSpeed / 6.67f, 0.3f, 3.0f); }
+			return p;
+		};
+		if (repeat) { if (cyc > 0.001) tt = fmod(tt, cyc); }
+		else if (tt >= cyc - legs.back().wait) { auto& l = legs.back(); return place(l.b, dirOf(l.b.x - l.a.x, l.b.z - l.a.z), false); }
+		for (auto& l : legs)
+		{
+			int d = dirOf(l.b.x - l.a.x, l.b.z - l.a.z);
+			if (l.t > 0.0001 && l.a != l.b) d = dirOf(l.b.x - l.a.x, l.b.z - l.a.z); else d = p.dir;
+			if (tt < l.t) { float f = l.t > 0 ? (float)(tt / l.t) : 1.0f; return place(l.a + (l.b - l.a) * f, d, true); }
+			tt -= l.t;
+			if (tt < l.wait) return place(l.b, d, false);
+			tt -= l.wait;
+		}
+		return p;
+	}
+
 	// ------------------------------------------------------------------ rendering
 	void System::render(MapView* mv, BrowEdit* be)
 	{
@@ -392,20 +491,21 @@ namespace sprite
 		glm::vec3 fwd = -glm::vec3(view[0][2], view[1][2], view[2][2]);
 		const float basePs = 5.0f / 35.0f;
 
-		struct Item { const Instance* in; glm::vec3 world; float depth; bool ghost; };
+		struct Item { const Instance* in; glm::vec3 world; float depth; bool ghost; int dir; int action; float mul; };
 		std::vector<Item> order;
 		for (auto& in : L.items)
 			if (in.visible)
 			{
-				glm::vec3 w = toWorld(in.pos, gnd) + glm::vec3(0, in.elevation, 0);
-				order.push_back({ &in, w, glm::dot(w - camPos, fwd), false });
+				Pose po = poseOf(*this, mv->map, gnd, in, time, impl->dragging && impl->dragOrig.count(in.id));
+				glm::vec3 w = po.world + glm::vec3(0, in.elevation, 0);
+				order.push_back({ &in, w, glm::dot(w - camPos, fwd), false, po.dir, po.action, po.mul });
 			}
 		Instance ghostInst;
 		if (ghost && impl->ghostValid)
 		{
 			ghostInst.cfg = draft.cfg; ghostInst.action = draft.action; ghostInst.dir = draft.dir; ghostInst.speed = draft.speed; ghostInst.scale = draft.scale;
 			glm::vec3 w = impl->ghostWorld + glm::vec3(0, draft.elevation, 0);
-			order.push_back({ &ghostInst, w, glm::dot(w - camPos, fwd), true });
+			order.push_back({ &ghostInst, w, glm::dot(w - camPos, fwd), true, draft.dir, draft.action, 1.0f });
 		}
 		std::sort(order.begin(), order.end(), [](const Item& a, const Item& b) { return a.depth > b.depth; });
 
@@ -436,8 +536,8 @@ namespace sprite
 		for (auto& it : order)
 		{
 			const Instance& in = *it.in;
-			int eff = viewDir(view, in.dir);
-			auto f = impl->frameFor(*this, in, eff, time);
+			int eff = viewDir(view, it.dir);
+			auto f = impl->frameFor(*this, in, eff, time, nullptr, it.action, it.mul);
 			if (!f || f->w <= 0) continue;
 			unsigned int t = impl->tex(*f);
 			if (!t) continue;
@@ -459,6 +559,56 @@ namespace sprite
 				glLineWidth(1.0f);
 			}
 		}
+		// paths of the selected sprites (and of all when 'Show paths' is on)
+		glDisable(GL_DEPTH_TEST);
+		shader->setUniform(CharShader::Uniforms::depthBias, 0.0f);
+		glBindTexture(GL_TEXTURE_2D, impl->whiteTex);
+		for (auto& in : L.items)
+		{
+			bool sel = L.selected.count(in.id) > 0;
+			if (!in.visible || !in.pathEnabled || !(sel || showPaths)) continue;
+			glm::vec3 home = toWorld(in.pos, gnd);
+			if (sel && in.path.empty() && in.wanderRadius > 0.01f)
+			{	// wander area
+				std::vector<float> ring;
+				shader->setUniform(CharShader::Uniforms::modelMatrix, glm::translate(glm::mat4(1.0f), home));
+				shader->setUniform(CharShader::Uniforms::color, glm::vec4(0.4f, 0.8f, 1.0f, 0.9f));
+				for (int k = 0; k < 48; k++)
+				{
+					float a = k / 48.0f * 6.2831853f;
+					glm::vec3 off = glm::vec3(view * glm::vec4(cosf(a) * in.wanderRadius * 5.0f, 0, sinf(a) * in.wanderRadius * 5.0f, 0));
+					ring.insert(ring.end(), { off.x, off.y, 0, 0, 0 });
+				}
+				glVertexAttribPointer(0, 3, GL_FLOAT, false, 5 * sizeof(float), &ring[0]);
+				glVertexAttribPointer(1, 2, GL_FLOAT, false, 5 * sizeof(float), &ring[3]);
+				glLineWidth(2.0f); glDrawArrays(GL_LINE_LOOP, 0, 48); glLineWidth(1.0f);
+			}
+			if (in.path.empty()) continue;
+			std::vector<glm::vec3> pts{ home };
+			for (auto& w : in.path) pts.push_back(toWorld(w, gnd) + glm::vec3(0, 0.3f, 0));
+			pts[0].y += 0.3f;
+			if (in.pathMode == 1) pts.push_back(pts[0]);
+			std::vector<float> line;
+			for (auto& p : pts) { glm::vec3 off = glm::vec3(view * glm::vec4(p - pts[0], 0)); line.insert(line.end(), { off.x, off.y, 0, 0, 0 }); }
+			shader->setUniform(CharShader::Uniforms::modelMatrix, glm::translate(glm::mat4(1.0f), pts[0]));
+			shader->setUniform(CharShader::Uniforms::color, sel ? glm::vec4(0.5f, 1.0f, 0.4f, 1) : glm::vec4(0.5f, 1.0f, 0.4f, 0.5f));
+			glVertexAttribPointer(0, 3, GL_FLOAT, false, 5 * sizeof(float), &line[0]);
+			glVertexAttribPointer(1, 2, GL_FLOAT, false, 5 * sizeof(float), &line[3]);
+			glLineWidth(sel ? 2.5f : 1.5f); glDrawArrays(GL_LINE_STRIP, 0, (int)pts.size()); glLineWidth(1.0f);
+			if (!sel) continue;
+			for (size_t k = 0; k < in.path.size() + 1; k++)
+			{
+				glm::vec3 c = k == 0 ? pts[0] : pts[k];
+				const float h = 0.9f;
+				const float q[4][5] = { {-h,-h,0,0,0}, {-h,h,0,0,0}, {h,h,0,0,0}, {h,-h,0,0,0} };
+				shader->setUniform(CharShader::Uniforms::modelMatrix, glm::translate(glm::mat4(1.0f), c));
+				shader->setUniform(CharShader::Uniforms::color, k == 0 ? glm::vec4(1, 0.6f, 0.1f, 1) : k == in.path.size() ? glm::vec4(1, 0.3f, 0.3f, 1) : glm::vec4(0.4f, 1, 0.4f, 1));
+				glVertexAttribPointer(0, 3, GL_FLOAT, false, 5 * sizeof(float), &q[0][0]);
+				glVertexAttribPointer(1, 2, GL_FLOAT, false, 5 * sizeof(float), &q[0][3]);
+				glDrawArrays(GL_QUADS, 0, 4);
+			}
+		}
+		glEnable(GL_DEPTH_TEST);
 		glUseProgram(0);
 	}
 
@@ -482,9 +632,10 @@ namespace sprite
 		for (auto& in : L.items)
 		{
 			if (!in.visible || in.locked) continue;
-			auto f = im.frameFor(sys, in, viewDir(view, in.dir), time);
+			Pose po = poseOf(sys, mv->map, gnd, in, time, im.dragging && im.dragOrig.count(in.id));
+			auto f = im.frameFor(sys, in, viewDir(view, po.dir), time, nullptr, po.action, po.mul);
 			if (!f || f->w <= 0) continue;
-			glm::vec3 w = toWorld(in.pos, gnd) + glm::vec3(0, in.elevation, 0);
+			glm::vec3 w = po.world + glm::vec3(0, in.elevation, 0);
 			float denom = glm::dot(mv->mouseRay.dir, fwd);
 			if (fabsf(denom) < 1e-5f) continue;
 			float t = glm::dot(w - mv->mouseRay.origin, fwd) / denom;
@@ -600,6 +751,17 @@ namespace sprite
 							if (impl->dragOrig.empty()) impl->dragging = false;
 						}
 					}
+				}
+			}
+			else if (io.KeyShift && L.selected.size() == 1 && L.find(*L.selected.begin()) && !L.find(*L.selected.begin())->locked)
+			{	// Shift + left click on the ground: add a waypoint to the selected sprite
+				glm::vec3 w;
+				if (cursorGround(mv, gnd, snapToGat, w))
+				{
+					MapLayer before = L;
+					L.find(*L.selected.begin())->path.push_back(toRsw(w, gnd));
+					L.find(*L.selected.begin())->pathEnabled = true;
+					pushLayerAction(mv->map, be, L, before, "Add waypoint");
 				}
 			}
 			else if (io.KeyCtrl)

@@ -34,6 +34,8 @@ namespace sprite
 		std::vector<int> actionsAvail;
 		std::map<int, std::shared_ptr<Frame>> thumbs;
 		std::string renameBuf;
+		MapLayer pathSnap;
+		bool pathPending = false;
 		std::map<std::string, std::shared_ptr<Frame>> mobThumbs;
 		std::string browserFilter;
 		int browserTab = 0;
@@ -61,7 +63,7 @@ namespace sprite
 		unsigned int tex(Frame& f);
 		void freeDropped(System& s);
 		void ensureOpts(System& s);
-		std::shared_ptr<Frame> frameFor(System& s, const Instance& in, int effDir, double time, AnimInfo* info = nullptr);
+		std::shared_ptr<Frame> frameFor(System& s, const Instance& in, int effDir, double time, AnimInfo* info = nullptr, int actionOverride = -1, float speedMul = 1.0f);
 		void loadPresets(System& s);
 		void savePresets(System& s);
 		void applyJobChange(System& s, CharacterConfig& c, const std::string& newJob, int newGender);

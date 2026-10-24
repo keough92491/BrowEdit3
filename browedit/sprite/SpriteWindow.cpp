@@ -288,6 +288,7 @@ namespace sprite
 		auto* mv = be->activeMapView;
 		Map* map = mv ? mv->map : nullptr;
 
+		if (map && db.ready && !im.pathPending) im.pathSnap = layer(map, be);	// state before any movement edit, for undo
 		double now = ImGui::GetTime();
 		if (im.playing) im.previewTime += now - im.lastTime;
 		im.lastTime = now;
@@ -542,8 +543,77 @@ namespace sprite
 					pushLayerAction(map, be, *L, before, "Paste sprite(s)");
 				}
 				ImGui::EndDisabled();
-				ImGui::TextDisabled("%zu selected. Click: select (Ctrl+click a sprite toggles, Shift adds), Ctrl+click on the ground: add, drag: move, double click: edit here, Delete key: remove.", nsel);
+				ImGui::TextDisabled("%zu selected. Click: select (Ctrl+click a sprite toggles, Shift adds), Ctrl+click on the ground: add, Shift+click on the ground: waypoint for the selected sprite, drag: move, double click: edit here, Delete key: remove.", nsel);
 				ImGui::TextDisabled("Editor-only: saved next to the map in <map>.browsprites.json. They are not NPCs and are not written to the RSW.");
+			}
+
+			// ---------- movement
+			if (ImGui::CollapsingHeader("Movement / waypoints"))
+			{
+				ImGui::Checkbox("Preview movement in map", &previewMovement);
+				ImGui::SameLine(); if (ImGui::Button("Restart")) pathEpoch = ImGui::GetTime();
+				ImGui::SameLine(); ImGui::Checkbox("Show all paths", &showPaths);
+				auto* LL = map ? &layer(map, be) : nullptr;
+				std::vector<Instance*> sel;
+				if (LL) for (int id : LL->selected) if (auto* in = LL->find(id)) sel.push_back(in);
+				if (sel.empty()) ImGui::TextDisabled("Select a sprite on the map to edit how it moves.");
+				else
+				{
+					Instance& f = *sel[0];
+					auto apply = [&](auto fn) { for (auto* i : sel) fn(*i); im.pathPending = true; };
+					bool en = f.pathEnabled;
+					if (ImGui::Checkbox("Move along the path / wander", &en)) apply([&](Instance& i) { i.pathEnabled = en; });
+					float v = f.moveSpeed;
+					ImGui::SetNextItemWidth(180);
+					if (ImGui::DragFloat("Move speed (cells/s)", &v, 0.05f, 0.5f, 30.0f, "%.2f")) apply([&](Instance& i) { i.moveSpeed = v; });
+					if (ImGui::IsItemHovered()) ImGui::SetTooltip("The client walks about 6.7 cells per second (one cell = 5 map units)");
+					v = f.waitTime; ImGui::SetNextItemWidth(180);
+					if (ImGui::DragFloat("Wait at each point (s)", &v, 0.05f, 0.0f, 120.0f, "%.2f")) apply([&](Instance& i) { i.waitTime = v; });
+					v = f.startDelay; ImGui::SetNextItemWidth(180);
+					if (ImGui::DragFloat("Start delay (s)", &v, 0.05f, 0.0f, 120.0f, "%.2f")) apply([&](Instance& i) { i.startDelay = v; });
+					int mode = f.pathMode; const char* modes[] = { "Once (stop at the last point)", "Loop (walk back to the start)", "Ping-pong (there and back)" };
+					ImGui::SetNextItemWidth(220);
+					if (ImGui::Combo("Path mode", &mode, modes, 3)) apply([&](Instance& i) { i.pathMode = mode; });
+					bool b = f.faceMove;
+					if (ImGui::Checkbox("Face the walking direction", &b)) apply([&](Instance& i) { i.faceMove = b; });
+					b = f.syncAnim; ImGui::SameLine();
+					if (ImGui::Checkbox("Walk animation follows speed", &b)) apply([&](Instance& i) { i.syncAnim = b; });
+					int wa = f.walkAction;
+					ImGui::SetNextItemWidth(180);
+					if (ImGui::BeginCombo("Walking animation", actionLabel(f.cfg, wa).c_str()))
+					{
+						for (int a = 0; a < (f.cfg.kind == 0 ? actionDefCount : 12); a++)
+							if (composer.info(f.cfg, a, 0).valid && ImGui::Selectable(actionLabel(f.cfg, a).c_str(), a == wa)) apply([&](Instance& i) { i.walkAction = a; });
+						ImGui::EndCombo();
+					}
+					v = f.wanderRadius; ImGui::SetNextItemWidth(180);
+					if (ImGui::DragFloat("Wander radius (cells)", &v, 0.1f, 0.0f, 40.0f, "%.1f")) apply([&](Instance& i) { i.wanderRadius = v; });
+					if (ImGui::IsItemHovered()) ImGui::SetTooltip("Without waypoints, the sprite strolls to random walkable GAT cells around where it stands. 0 = off.");
+					if (sel.size() == 1)
+					{
+						ImGui::Separator();
+						ImGui::Text("%zu waypoint(s) - Shift+click on the map adds one", f.path.size());
+						int del = -1;
+						ImGui::BeginChild("##wps", ImVec2(0, std::min(140.0f, 24.0f * (f.path.size() + 1))), true);
+						for (size_t k = 0; k < f.path.size(); k++)
+						{
+							ImGui::PushID((int)k);
+							ImGui::Text("%zu: %.0f, %.0f, %.0f", k + 1, f.path[k].x, f.path[k].y, f.path[k].z);
+							ImGui::SameLine(); if (ImGui::SmallButton("Delete")) del = (int)k;
+							ImGui::PopID();
+						}
+						ImGui::EndChild();
+						if (del >= 0) { f.path.erase(f.path.begin() + del); im.pathPending = true; }
+						if (ImGui::Button("Remove last") && !f.path.empty()) { f.path.pop_back(); im.pathPending = true; }
+						ImGui::SameLine(); if (ImGui::Button("Clear path")) { f.path.clear(); im.pathPending = true; }
+					}
+					else ImGui::TextDisabled("Waypoints can be edited when exactly one sprite is selected.");
+				}
+				if (im.pathPending && LL && !ImGui::IsAnyItemActive())
+				{
+					pushLayerAction(map, be, *LL, im.pathSnap, "Edit movement");
+					im.pathPending = false;
+				}
 			}
 
 			// ---------- presets

@@ -23,6 +23,16 @@ namespace sprite
 		glm::vec3 pos = glm::vec3(0);	// RSW style coordinates (same as object positions)
 		float elevation = 0;
 		bool visible = true, locked = false;
+		// movement (editor preview): the sprite walks from its position through the waypoints (RSW style coordinates)
+		std::vector<glm::vec3> path;
+		bool pathEnabled = true;
+		int pathMode = 1;			// 0 = once, 1 = loop, 2 = ping-pong
+		float moveSpeed = 4.0f;		// cells per second (the client walks about 6.7)
+		float waitTime = 1.0f;		// seconds standing at each waypoint
+		float startDelay = 0.0f;
+		bool faceMove = true, syncAnim = true;
+		int walkAction = 1;
+		float wanderRadius = 0.0f;	// cells; > 0 and no waypoints: wanders around its position
 		// runtime cache of the rendered frames (not saved)
 		mutable CharacterConfig rtCfg; mutable std::string rtKey; mutable int rtAction = -1, rtDir = -1; mutable AnimInfo rtInfo; mutable bool rtValid = false;
 		mutable std::vector<std::shared_ptr<Frame>> rtFrames;
@@ -76,6 +86,8 @@ namespace sprite
 		Draft draft;
 		bool placing = false;			// ADD TO MAP pressed: the ghost follows the cursor
 		bool showShadow = true;
+		bool previewMovement = true, showPaths = true;
+		double pathEpoch = 0;
 		bool browserDrag = false, browserDrop = false;	// a sprite is being dragged out of the Sprite Browser / was just dropped
 		bool showBrowser = true;
 		void drawBrowser(BrowEdit* browEdit);
