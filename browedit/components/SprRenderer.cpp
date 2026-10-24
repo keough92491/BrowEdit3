@@ -1,3 +1,4 @@
+#include <glad/gl.h>
 #include "SprRenderer.h"
 #include <browedit/util/ResourceManager.h>
 #include <browedit/util/FileIO.h>
@@ -7,7 +8,6 @@
 #include <browedit/components/Gnd.h>
 #include <browedit/gl/Texture.h>
 #include <browedit/gl/Vertex.h>
-#include <glad/gl.h>
 #include <glm/gtc/matrix_transform.hpp>
 #include <iostream>
 #include <iterator>
