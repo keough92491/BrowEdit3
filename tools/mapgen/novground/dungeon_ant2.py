@@ -1,5 +1,5 @@
 """Lower-right ant-nest dungeon, UL-style: smooth cave slopes, black rock ceiling, baked atlases (antflat floor + moss/mine rock).
-Layout traced from the user's 'Ant Nest' guide.  Writes an_h/an_g/an_t json + prt_novao%02d.bmp, preview an_pv.png."""
+Layout traced from the user's 'Ant Nest' guide.  Writes an_h/an_g/an_t json + prt_novap%02d.bmp, preview an_pv.png."""
 import json, os, numpy as np, cv2
 from PIL import Image, ImageDraw
 from scipy import ndimage as ndi
@@ -45,8 +45,8 @@ _ok = (_ipx >= 0) & (_ipx < _lm.shape[1]) & (_ipy >= 0) & (_ipy < _lm.shape[0])
 _cm = np.zeros((NX, NY), bool); _cm[_ok] = _lm[_ipy[_ok], _ipx[_ok]] > 0
 floor_core0 = floor_core0 | _cm
 _ci = Image.fromarray((floor_core0[:, ::-1].T * 255).astype(np.uint8)); d = ImageDraw.Draw(_ci); img = _ci
-_P = [to_px(*p) for p in [(158.4, 72.5), (158.5, 64.0)]]; d.line(_P, fill=255, width=int(2.8 * R), joint="curve")
-_F = [(157.2, 69.0), (159.8, 69.0), (160.1, 66.0), (161.4, 63.4), (164.2, 60.8), (153.8, 60.8), (156.6, 63.4), (157.0, 66.0)]
+_P = [to_px(*p) for p in [(158.8, 70.0), (158.5, 64.0)]]; d.line(_P, fill=255, width=int(2.8 * R), joint="curve")
+_F = [(157.4, 68.0), (160.0, 68.0), (160.1, 66.0), (161.4, 63.4), (164.2, 60.8), (153.8, 60.8), (156.6, 63.4), (157.0, 66.0)]
 d.polygon([to_px(*p) for p in _F], fill=255)
 floor0 = np.array(img)[::-1].T > 127
 fx, fy = np.meshgrid(X0 + (np.arange(NX) + 0.5) / R, Y0 + (np.arange(NY) + 0.5) / R, indexing="ij")
@@ -172,35 +172,46 @@ for x in range(NXc):
         if not (inblk[x, y] or ext): continue
         if not ext and min(sds) >= SLOPE + 0.5 and min(dbs) >= SLOPE_B + 0.5: plain.append((ax, ay))
         else: baked.append((ax, ay))
-# ---- new road along the user's red lines (screenshot road_red_shot.png), blended into the old field
+# ---- new road along the user's red lines (screenshot road_red_shot2.png), calibrated through marker cubes
 HERE = os.path.dirname(os.path.abspath(__file__))
 T_DIRT = load("/mnt/user-data/uploads/ROO_MAP/data/texture/roo_prtf/prt_Èë03.bmp")
 f3 = np.load(SCR + "road_field3.npy")
-Dm = cv2.imread(os.path.join(HERE, "road_red_shot.png")); HdB = np.load(os.path.join(HERE, "road_Hdb.npy")); HbM = np.load(os.path.join(HERE, "road_Hb.npy"))
-_red = ((Dm[..., 2] > 200) & (Dm[..., 1] < 60) & (Dm[..., 0] < 60)).astype(np.uint8) * 255
+Sm = cv2.imread(os.path.join(HERE, "road_red_shot2.png")); Hs = np.load(os.path.join(HERE, "road_Hsmap.npy"))
+_red = ((Sm[..., 2] > 200) & (Sm[..., 1] < 60) & (Sm[..., 0] < 60)).astype(np.uint8) * 255
 _red = cv2.dilate(_red, np.ones((5, 5), np.uint8)); _lab = ndi.label(_red > 0)[0]
-_loop = ((_lab == _lab[40, 507]) if _lab[40, 507] else (_lab == np.bincount(_lab[_lab > 0]).argmax())).astype(np.uint8) * 255
-cv2.line(_loop, (507, 42), (572, 22), 255, 5); _ff = _loop.copy(); _m = np.zeros((_ff.shape[0] + 2, _ff.shape[1] + 2), np.uint8); cv2.floodFill(_ff, _m, (3, 3), 128)
-loopD = (_ff != 128)
-RQ, RX0, RX1, RY0, RY1 = 8, 144, 168, 70, 110
+_big = _lab == np.bincount(_lab[_lab > 0]).argmax()
+_loop = _big.astype(np.uint8) * 255
+cv2.line(_loop, (35, 250), (25, 300), 255, 5); _ff = _loop.copy(); _m = np.zeros((_ff.shape[0] + 2, _ff.shape[1] + 2), np.uint8); cv2.floodFill(_ff, _m, (3, 3), 128)
+loopS = (_ff != 128)
+RQ, RX0, RX1, RY0, RY1 = 8, 108, 168, 68, 122
 rxs = RX0 + (np.arange((RX1 - RX0) * RQ) + 0.5) / RQ; rys = RY0 + (np.arange((RY1 - RY0) * RQ) + 0.5) / RQ
 RX, RY = np.meshgrid(rxs, rys, indexing="ij")
-_P = np.stack([RX.ravel(), RY.ravel(), np.ones(RX.size)]); _Q = np.linalg.inv(HdB) @ np.linalg.inv(HbM) @ _P; _q = (_Q[:2] / _Q[2]).T
-_ix = np.clip(np.round(_q[:, 0]).astype(int), 0, loopD.shape[1] - 1); _iy = np.clip(np.round(_q[:, 1]).astype(int), 0, loopD.shape[0] - 1)
-inloop = loopD[_iy, _ix].reshape(RX.shape)
+_P = np.stack([RX.ravel(), RY.ravel(), np.ones(RX.size)]); _Q = np.linalg.inv(Hs) @ _P; _q = (_Q[:2] / _Q[2]).T
+_ix = np.clip(np.round(_q[:, 0]).astype(int), 0, loopS.shape[1] - 1); _iy = np.clip(np.round(_q[:, 1]).astype(int), 0, loopS.shape[0] - 1)
+redm = (_big[_iy, _ix]).reshape(RX.shape)
+_ii = lambda x, y: (int((x - RX0) * RQ), int((y - RY0) * RQ))
+_pm = redm.astype(np.uint8)
+cv2.line(_pm, _ii(115.4, 100.4)[::-1], _ii(115.8, 96.8)[::-1], 1, 3) if False else None
+_t = np.ascontiguousarray(_pm.T.copy()); cv2.line(_t, _ii(115.4, 100.4), _ii(115.8, 96.8), 1, 3)
+_t = cv2.dilate(_t, np.ones((3, 3), np.uint8))
+_tt = _t.T > 0
+for _k in (9, 15, 21, 29, 41):
+    inloop = ndi.binary_fill_holes(ndi.binary_closing(np.pad(_tt, _k), structure=np.ones((_k, _k)))[_k:-_k, _k:-_k])
+    if inloop.sum() > 2.2 * _tt.sum(): break
+print('road fill', _k, inloop.sum(), _tt.sum())
 old_f = ndi.map_coordinates(f3, [RX, RY], order=1, mode="nearest") > 0
-band = (RY > 77.8) & (RY < 103.3)
-M = np.where(band, inloop, old_f)
+M = np.where((RX > 117.5) & (RY < 116.5), inloop, old_f)
 sdR = (ndi.distance_transform_edt(M) - ndi.distance_transform_edt(~M)) / RQ
-sdR = ndi.gaussian_filter(sdR, 0.4 * RQ)
+sdR = ndi.gaussian_filter(sdR, 0.45 * RQ)
 f4 = f3.copy()
 gx_, gy_ = np.meshgrid(np.arange(RX0, RX1 + 1), np.arange(RY0, RY1 + 1), indexing="ij")
 sdc = ndi.map_coordinates(sdR, [(gx_ - RX0) * RQ - 0.5, (gy_ - RY0) * RQ - 0.5], order=1, mode="nearest")
-_rw = np.random.default_rng(31); _wb = ndi.zoom(_rw.random((14, 14)), 4, order=3)[:RX1 - RX0 + 1, :RY1 - RY0 + 1] - 0.5
-sdc = np.where(sdc > -3.5, sdc + 0.3 * _wb[:sdc.shape[0], :sdc.shape[1]] * 0.0 + 0.25 * (ndi.zoom(_rw.random((9, 15)), 3, order=3)[:sdc.shape[0], :sdc.shape[1]] - 0.5), sdc)
+_rw = np.random.default_rng(31)
+sdc = np.where(sdc > -3.5, sdc + 0.25 * (ndi.zoom(_rw.random((24, 22)), 3, order=3)[:sdc.shape[0], :sdc.shape[1]] - 0.5), sdc)
 sdc = np.clip(ndi.gaussian_filter(sdc, 0.5), -4, 4)
 _dw = np.minimum.reduce([gx_ - RX0, RX1 - gx_, gy_ - RY0, RY1 - gy_]); _wg = np.clip(_dw / 3.0, 0, 1); _wg = _wg * _wg * (3 - 2 * _wg)
 f4[RX0:RX1 + 1, RY0:RY1 + 1] = f3[RX0:RX1 + 1, RY0:RY1 + 1] * (1 - _wg) + sdc * _wg
+np.save(SCR + "road_field4.npy", f4)
 def road_sd(wx, wy): return ndi.map_coordinates(f4, [wx, wy], order=1, mode="nearest")
 dsetx = {(a, b) for a, b in baked} | {(a, b) for a, b in plain}
 road_cubes = []; road_plain = []
@@ -210,7 +221,7 @@ for x in range(RX0, RX1):
         v = f4[x:x + 2, y:y + 2]
         if v.min() < 0.7 and v.max() > -0.7: road_cubes.append((x, y))
         else: road_plain.append((x, y, v.mean() > 0))
-road_blend = {(x, y) for (x, y) in baked if RX0 <= x < RX1 and y >= RY0}
+road_blend = set()
 baked = baked + road_cubes
 set_road_only = set(road_cubes)
 natl = (len(baked) + NC - 1) // NC
@@ -249,6 +260,8 @@ for n_, (x, y) in enumerate(baked):
     wcv = 1 - smooth((-se - 0.2 + 0.3 * n1) / 2.6)
     col = col * wcv[..., None] + outc * (1 - wcv[..., None])
     if is_road_only: col = out.copy()
+    wf = smooth((wy - 67.8) / 3.2)[..., None] * smooth((fld(dF, wx, wy) * -1 + 1.5) / 1.5)[..., None] * (1.0 if y >= 66 else 0.0)
+    col = col * (1 - wf) + out * wf
     if is_road_only or (x, y) in road_blend:
         sdn = road_sd(wx, wy) + 0.12 * fld(nz1, wx, wy) + 0.05 * fld(nz2, wx, wy)
         wdr = smooth(0.5 + (sdn + 0.04) / 0.55)[..., None]
@@ -268,7 +281,7 @@ def _pl(x, y):
     return [round(float(q), 5) for p in pts for q in p]
 for x, y, dirt in road_plain: tiles.append([x, y, 2 if dirt else 0] + _pl(x, y))
 for k in range(natl):
-    Image.fromarray(atl[k]).quantize(colors=256, method=Image.Quantize.MEDIANCUT, dither=Image.Dither.FLOYDSTEINBERG).save(OUT + "prt_novao%02d.bmp" % (k + 1))
+    Image.fromarray(atl[k]).quantize(colors=256, method=Image.Quantize.MEDIANCUT, dither=Image.Dither.FLOYDSTEINBERG).save(OUT + "prt_novap%02d.bmp" % (k + 1))
 # gat
 gx, gy = np.meshgrid(X0 + (np.arange(2 * NXc) + 0.5) / 2, Y0 + (np.arange(2 * NYc) + 0.5) / 2, indexing="ij")
 gi = np.clip(((gx - X0) * R).astype(int), 0, NX - 1); gj = np.clip(((gy - Y0) * R).astype(int), 0, NY - 1)
@@ -287,12 +300,17 @@ json.dump({"commands": heights}, open(OUT + "an_h.json", "w"), separators=(",", 
 json.dump({"commands": [{"cmd": "tiles", "list": tiles}]}, open(OUT + "an_t.json", "w"), separators=(",", ":"))
 json.dump({"commands": [{"cmd": "gat", "rows": rows}]}, open(OUT + "an_g.json", "w"), separators=(",", ":"))
 # preview: composite of cells + black tops on grass
-NYv = 110 - Y0
-pv = np.zeros((NYv * CELL, NXc * CELL, 3), np.uint8); pv[:] = (112, 128, 48)
-for x, y in plain: pv[(NYv - 1 - (y - Y0)) * CELL:(NYv - (y - Y0)) * CELL, (x - X0) * CELL:(x - X0 + 1) * CELL] = 0
+PX0, PX1, PY0, PY1 = 108, 196, Y0, 120
+pv = np.zeros(((PY1 - PY0) * CELL, (PX1 - PX0) * CELL, 3), np.uint8); pv[:] = (112, 128, 48)
+def _put(x, y, c):
+    if PX0 <= x < PX1 and PY0 <= y < PY1:
+        pv[(PY1 - 1 - y) * CELL:(PY1 - y) * CELL, (x - PX0) * CELL:(x - PX0 + 1) * CELL] = c
+for x, y in plain: _put(x, y, 0)
+for x, y, d in road_plain:
+    if d: _put(x, y, (196, 160, 96))
 for k, c in cells.items():
-    x, y = map(int, k.split("_")); pv[(NYv - 1 - (y - Y0)) * CELL:(NYv - (y - Y0)) * CELL, (x - X0) * CELL:(x - X0 + 1) * CELL] = c
-Image.fromarray(pv).resize((NXc * 16, NYv * 16), Image.LANCZOS).save(OUT + "an_pv.png")
+    x, y = map(int, k.split("_")); _put(x, y, c)
+Image.fromarray(pv).resize(((PX1 - PX0) * 16, (PY1 - PY0) * 16), Image.LANCZOS).save(OUT + "an_pv.png")
 hv = (np.clip(128 - HC / RISE * 100, 0, 255)).astype(np.uint8).T[::-1]
 Image.fromarray(hv).resize((NXc * 8, NYc * 8), Image.NEAREST).save(SCR + "an_hpv.png")
 print("baked", len(baked), "plain", len(plain), "atlases", natl, "hmin", HC.min(), "rows", len(rows))
