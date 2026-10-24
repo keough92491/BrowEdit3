@@ -75,6 +75,14 @@ namespace sprite
 		}
 	}
 
+	static std::string actionLabel(const CharacterConfig& c, int a)
+	{
+		if (c.kind == 0) return actionDefs[std::min(std::max(a, 0), actionDefCount - 1)].name;
+		static const char* m[] = { "Idle", "Walk", "Attack", "Hit", "Die" };
+		if (c.kind == 1 && a >= 0 && a < 5) return m[a];
+		return "Action " + std::to_string(a);
+	}
+
 	// ------------------------------------------------------------------ option lists (discovered from the data)
 	void System::Impl::ensureOpts(System& s)
 	{
@@ -96,6 +104,12 @@ namespace sprite
 			for (auto& e : s.db.headgear) headgearOpts[g].push_back({ e.id, pretty(e.label) + " [" + std::to_string(e.id) + "]", e.has[g] });
 			for (auto& e : s.db.robes) robeOpts[g].push_back({ e.id, pretty(e.label) + " [" + std::to_string(e.id) + "]", e.has[g] });
 			for (auto& e : s.db.weapons) weaponOpts[g].push_back({ e.id, pretty(e.label.rfind("WEAPONTYPE_", 0) == 0 ? e.label.substr(11) : e.label) + " [" + std::to_string(e.id) + "]", e.has[g] });
+		}
+		for (int k = 1; k <= 2; k++)
+		{
+			mobOpts[k].clear();
+			auto& list = k == 1 ? s.db.monsters : s.db.npcs;
+			for (size_t i = 0; i < list.size(); i++) mobOpts[k].push_back({ (int)i + 1, list[i].label + (list[i].id >= 0 ? " [" + std::to_string(list[i].id) + "]" : ""), true });
 		}
 		thumbs.clear();
 	}
@@ -264,6 +278,8 @@ namespace sprite
 			ImGui::SameLine(); ImGui::Checkbox("Show unavailable", &im.showUnavailable);
 			if (ImGui::IsItemHovered()) ImGui::SetTooltip("Also list entries from the client tables whose files are not in your data");
 			ImGui::SameLine(); ImGui::Checkbox("Shadow in map", &showShadow);
+			ImGui::SameLine(); ImGui::Checkbox("Stand on GAT", &snapToGat);
+			if (ImGui::IsItemHovered()) ImGui::SetTooltip("Sprites stand on the GAT cell height (bridges, raised walkable areas). Off: they stand on the ground mesh.");
 			ImGui::SameLine(); ImGui::Checkbox("Object list", &showList);
 
 			auto& d = draft;
@@ -293,13 +309,35 @@ namespace sprite
 				im.warnKey = key;
 				im.warnings = composer.warnings(c);
 				im.actionsAvail.clear();
-				for (int a = 0; a < actionDefCount; a++)
-					if (composer.info(c, actionDefs[a].base, d.dir).valid) im.actionsAvail.push_back(a);
+				for (int a = 0; a < (c.kind == 0 ? actionDefCount : 40); a++)
+					if (composer.info(c, a, d.dir).valid) im.actionsAvail.push_back(a);
 			}
 
 			// ---------- customisation
 			if (ImGui::CollapsingHeader("Customization", ImGuiTreeNodeFlags_DefaultOpen))
 			{
+				{
+					int k = c.kind; const char* kinds[] = { "Player", "Monster", "NPC" };
+					ImGui::SetNextItemWidth(140);
+					if (ImGui::Combo("Type", &k, kinds, 3) && k != c.kind)
+					{
+						c.kind = k; d.action = 0; im.notice.clear(); im.previewTime = 0;
+						if (k && c.mob.empty()) { auto& l = k == 1 ? db.monsters : db.npcs; if (!l.empty()) c.mob = l[0].sprite; }
+					}
+					if (c.kind != 0)
+					{
+						auto& list = c.kind == 1 ? db.monsters : db.npcs;
+						if (list.empty()) ImGui::TextColored(ImVec4(1, 0.5f, 0.4f, 1), "No %s sprites found in data\\sprite\\%s", c.kind == 1 ? "monster" : "npc", c.kind == 1 ? "(monster folder)" : "npc");
+						int sel = 0;
+						for (size_t i = 0; i < list.size(); i++) if (list[i].sprite == c.mob) sel = (int)i + 1;
+						if (searchCombo(c.kind == 1 ? "Monster sprite" : "NPC sprite", c.mob.empty() ? "None" : c.mob, im.mobOpts[c.kind], sel, true, false) && sel > 0)
+						{
+							c.mob = list[sel - 1].sprite; d.action = 0;
+							if (d.name == "Sprite" || d.name.empty()) d.name = list[sel - 1].label;
+						}
+					}
+				}
+				if (c.kind == 0) {
 				auto jobIdx = -1;
 				for (size_t i = 0; i < db.jobs.size(); i++) if (db.jobs[i].sprite == c.job) jobIdx = (int)i;
 				std::string jobPreview = jobIdx >= 0 ? db.jobs[jobIdx].label + "  [" + c.job + "]" : c.job;
@@ -374,6 +412,7 @@ namespace sprite
 						ImGui::SameLine(); if (ImGui::Button("Reset")) memset(c.wingOff, 0, sizeof(c.wingOff));
 					}
 				}
+				}
 				if (!im.notice.empty()) ImGui::TextColored(ImVec4(1, 0.8f, 0.3f, 1), "%s", im.notice.c_str());
 			}
 			if (!im.warnings.empty())
@@ -395,9 +434,9 @@ namespace sprite
 				ImGui::SameLine(); if (ImGui::ArrowButton("##rl", ImGuiDir_Left)) d.dir = (d.dir + 1) % 8;
 				ImGui::SameLine(); if (ImGui::ArrowButton("##rr", ImGuiDir_Right)) d.dir = (d.dir + 7) % 8;
 				ImGui::SetNextItemWidth(200);
-				if (ImGui::BeginCombo("Animation", actionDefs[std::min(d.action, actionDefCount - 1)].name))
+				if (ImGui::BeginCombo("Animation", actionLabel(c, d.action).c_str()))
 				{
-					for (int a : im.actionsAvail) if (ImGui::Selectable(actionDefs[a].name, a == d.action)) { d.action = a; im.previewTime = 0; }
+					for (int a : im.actionsAvail) if (ImGui::Selectable(actionLabel(c, a).c_str(), a == d.action)) { d.action = a; im.previewTime = 0; }
 					ImGui::EndCombo();
 				}
 				ImGui::SetNextItemWidth(200); ImGui::DragFloat("Scale", &d.scale, 0.01f, 0.1f, 10.0f, "%.2f");
@@ -408,8 +447,8 @@ namespace sprite
 				bool haveMap = map != nullptr && map->rootNode->getComponent<Gnd>();
 				bool bad = !composer.info(c, d.action, d.dir).valid;
 				ImGui::BeginDisabled(!haveMap || bad);
-				if (ImGui::Button(placing ? "ADD TO MAP (placing...)" : "ADD TO MAP")) { placing = true; im.editingId = 0; }
-				if (ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled)) ImGui::SetTooltip(!haveMap ? "Open a map first" : bad ? "This character has no sprite to place" : "The ghost follows the cursor. Left click places it (Shift: keep placing), right click / Esc cancels.");
+				if (ImGui::Button(placing ? "ADD TO MAP (placing...)" : "ADD TO MAP  (Ctrl+Click)")) { placing = true; im.editingId = 0; }
+				if (ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled)) ImGui::SetTooltip(!haveMap ? "Open a map first" : bad ? "This character has no sprite to place" : "The ghost follows the cursor. Left click places it (Shift: keep placing), right click / Esc cancels.\nShortcut: Ctrl + left click on the map adds the sprite straight away, no need to press this button.");
 				ImGui::SameLine();
 				if (ImGui::Button("Add at X/Y/Z"))
 				{
@@ -467,7 +506,7 @@ namespace sprite
 					pushLayerAction(map, be, *L, before, "Paste sprite(s)");
 				}
 				ImGui::EndDisabled();
-				ImGui::TextDisabled("%zu selected. Click: select (Ctrl toggles, Shift adds), drag: move, double click: edit here, Delete key: remove.", nsel);
+				ImGui::TextDisabled("%zu selected. Click: select (Ctrl+click a sprite toggles, Shift adds), Ctrl+click on the ground: add, drag: move, double click: edit here, Delete key: remove.", nsel);
 				ImGui::TextDisabled("Editor-only: saved next to the map in <map>.browsprites.json. They are not NPCs and are not written to the RSW.");
 			}
 
@@ -567,7 +606,7 @@ namespace sprite
 							draft.cfg = in.cfg; draft.name = in.name; draft.action = in.action; draft.dir = in.dir; draft.speed = in.speed; draft.scale = in.scale; draft.pos = in.pos; draft.elevation = in.elevation; draft.visible = in.visible; draft.locked = in.locked;
 							if (mv) if (auto gnd = map->rootNode->getComponent<Gnd>()) mv->cameraCenter = glm::vec3(5 * gnd->width + in.pos.x, -in.pos.y, 10 + 5 * gnd->height - in.pos.z);
 						}
-						ImGui::TableNextColumn(); ImGui::Text("%s", pretty(in.cfg.job == "" ? "" : (db.job(in.cfg.job) ? db.job(in.cfg.job)->label : in.cfg.job)).c_str());
+						ImGui::TableNextColumn(); ImGui::Text("%s", in.cfg.kind != 0 ? in.cfg.mob.c_str() : pretty(db.job(in.cfg.job) ? db.job(in.cfg.job)->label : in.cfg.job).c_str());
 						ImGui::TableNextColumn(); ImGui::Text("%.0f, %.0f, %.0f", in.pos.x, in.pos.y, in.pos.z);
 						ImGui::TableNextColumn();
 						bool vis = in.visible; if (ImGui::Checkbox("##v", &vis)) { MapLayer before = L; in.visible = vis; pushLayerAction(map, be, L, before, "Toggle sprite visibility"); }

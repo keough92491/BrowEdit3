@@ -15,6 +15,8 @@ namespace sprite
 
 	struct CharacterConfig
 	{
+		int kind = 0;					// 0 = player, 1 = monster, 2 = npc (a single sprite)
+		std::string mob;				// sprite name when kind != 0
 		std::string job = "\xEC\xB4\x88\xEB\xB3\xB4\xEC\x9E\x90";	// novice
 		int gender = Male;
 		int hairStyle = 1, hairColor = 0, bodyPalette = -1;			// -1 = no palette

@@ -36,6 +36,8 @@ namespace sprite
 		bool has[2] = { false,false };	// file exists for male / female (robes: for at least one job)
 	};
 
+	struct MobEntry { std::string sprite; std::string label; int id = -1; };
+
 	class Db
 	{
 	public:
@@ -53,6 +55,7 @@ namespace sprite
 		std::vector<GearEntry> headgear;						// accessories
 		std::vector<GearEntry> robes;
 		std::vector<GearEntry> weapons;
+		std::vector<MobEntry> monsters, npcs;					// single sprites found in data\sprite\monster and data\sprite\npc
 		std::vector<std::string> shields;						// found by folder scan
 		std::vector<std::string> customWings;					// sprite files found in the optional custom folder
 		std::map<int, std::map<int, int>> layerItems;			// view id -> (dir or -1 for default) -> priority
@@ -74,6 +77,7 @@ namespace sprite
 		static std::string robePath(const GearEntry& e, const std::string& job, int g);
 		static std::string weaponPath(const GearEntry& e, const std::string& job, int g);
 		static std::string shieldPath(const std::string& shield, const std::string& job, int g);
+		static std::string mobPath(int kind, const std::string& name);	// kind 1 = monster, 2 = npc
 		static std::string imfPath(const std::string& job, int g);
 
 	private:

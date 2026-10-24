@@ -16,7 +16,7 @@ namespace sprite
 	nlohmann::json CharacterConfig::toJson() const
 	{
 		nlohmann::json j;
-		j["job"] = job; j["gender"] = gender; j["hairStyle"] = hairStyle; j["hairColor"] = hairColor; j["bodyPalette"] = bodyPalette;
+		j["kind"] = kind; j["mob"] = mob; j["job"] = job; j["gender"] = gender; j["hairStyle"] = hairStyle; j["hairColor"] = hairColor; j["bodyPalette"] = bodyPalette;
 		j["head"] = { head[0], head[1], head[2] }; j["costume"] = { costume[0], costume[1], costume[2] };
 		j["robe"] = robe; j["weapon"] = weapon; j["shield"] = shield; j["customWing"] = customWing;
 		nlohmann::json o = nlohmann::json::array();
@@ -27,7 +27,7 @@ namespace sprite
 	CharacterConfig CharacterConfig::fromJson(const nlohmann::json& j)
 	{
 		CharacterConfig c;
-		c.job = j.value("job", c.job); c.gender = j.value("gender", 0); c.hairStyle = j.value("hairStyle", 1); c.hairColor = j.value("hairColor", 0);
+		c.kind = j.value("kind", 0); c.mob = j.value("mob", std::string()); c.job = j.value("job", c.job); c.gender = j.value("gender", 0); c.hairStyle = j.value("hairStyle", 1); c.hairColor = j.value("hairColor", 0);
 		c.bodyPalette = j.value("bodyPalette", -1);
 		if (j.contains("head")) for (int i = 0; i < 3; i++) c.head[i] = j["head"][i];
 		if (j.contains("costume")) for (int i = 0; i < 3; i++) c.costume[i] = j["costume"][i];
@@ -73,6 +73,7 @@ namespace sprite
 		{
 			if (!db.exists(base + ".spr") || !db.exists(base + ".act")) w.push_back("Missing " + what + ": " + base);
 		};
+		if (c.kind != 0) { need(c.kind == 1 ? "monster" : "npc", Db::mobPath(c.kind, c.mob)); return w; }
 		need("body", Db::bodyPath(c.job, g));
 		if (c.hairStyle > 0) need("head", Db::headPath(c.hairStyle, g));
 		for (int i = 0; i < 3; i++)
@@ -100,6 +101,7 @@ namespace sprite
 			s.layers.push_back(l);
 			return &s.layers.back();
 		};
+		if (c.kind != 0) { add(Db::mobPath(c.kind, c.mob), 0, 0, nullptr, "body"); return s; }
 		std::shared_ptr<ro::Palette> bp;
 		if (c.bodyPalette >= 0) bp = loadPal(Db::bodyPalPath(c.job, g, c.bodyPalette));
 		add(Db::bodyPath(c.job, g), 0, 0, bp, "body");
@@ -143,8 +145,9 @@ namespace sprite
 	AnimInfo Composer::info(const CharacterConfig& c, int action, int dir)
 	{
 		AnimInfo i;
-		auto body = loadAct(Db::bodyPath(c.job, c.gender) + ".act");
+		auto body = loadAct((c.kind != 0 ? Db::mobPath(c.kind, c.mob) : Db::bodyPath(c.job, c.gender)) + ".act");
 		int a = action * 8 + dir;
+		if (body && body->actions.size() < 8 && !body->actions.empty()) a = std::min(action, (int)body->actions.size() - 1);	// sprites without direction sets
 		if (!body || a >= (int)body->actions.size() || body->actions[a].frames.empty()) return i;
 		i.valid = true; i.frames = (int)body->actions[a].frames.size();
 		i.ms = std::max(20.0f, body->actions[a].interval * 25.0f);
@@ -162,6 +165,7 @@ namespace sprite
 		auto f = std::make_shared<Frame>();
 		if (s.layers.empty() || s.layers[0].what != "body") { frames[key] = f; return f; }
 		int a = action * 8 + dir;
+		if (s.layers[0].a->actions.size() < 8 && !s.layers[0].a->actions.empty()) a = std::min(action, (int)s.layers[0].a->actions.size() - 1);
 
 		const int W = 480, H = 480, OX = 240, OY = 340;
 		ro::Canvas cv(W, H, OX, OY);

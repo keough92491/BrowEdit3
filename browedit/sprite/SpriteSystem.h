@@ -76,6 +76,7 @@ namespace sprite
 		Draft draft;
 		bool placing = false;			// ADD TO MAP pressed: the ghost follows the cursor
 		bool showShadow = true;
+		bool snapToGat = true;			// stand on the GAT height (else on the ground mesh)
 		bool showList = true;
 		std::vector<Preset> presets;
 

@@ -7,6 +7,7 @@
 #include <browedit/Node.h>
 #include <browedit/actions/Action.h>
 #include <browedit/components/Gnd.h>
+#include <browedit/components/Gat.h>
 #include <browedit/components/SprRenderer.h>
 #include <browedit/util/FileIO.h>
 #include <browedit/util/ResourceManager.h>
@@ -32,6 +33,7 @@ namespace sprite
 	{
 		nlohmann::json j;
 		j["id"] = id; j["name"] = name;
+		j["kind"] = cfg.kind == 0 ? "player" : cfg.kind == 1 ? "monster" : "npc"; j["mob"] = cfg.mob;
 		j["job"] = cfg.job;
 		auto je = db.job(cfg.job);
 		j["jobId"] = je ? je->id : -1;
@@ -52,6 +54,8 @@ namespace sprite
 		Instance i;
 		i.id = j.value("id", 0); i.name = j.value("name", std::string("Sprite"));
 		auto& c = i.cfg;
+		{ std::string k = j.value("kind", std::string("player")); c.kind = k == "monster" ? 1 : k == "npc" ? 2 : 0; }
+		c.mob = j.value("mob", std::string());
 		c.job = j.value("job", c.job);
 		c.gender = j.value("gender", std::string("male")) == "female" ? Female : Male;
 		c.hairStyle = j.value("hairStyle", 1); c.hairColor = j.value("hairColor", 0); c.bodyPalette = j.value("bodyPalette", -1);
@@ -234,7 +238,7 @@ namespace sprite
 
 	static bool sameCfg(const CharacterConfig& a, const CharacterConfig& b)
 	{
-		return a.job == b.job && a.gender == b.gender && a.hairStyle == b.hairStyle && a.hairColor == b.hairColor && a.bodyPalette == b.bodyPalette &&
+		return a.kind == b.kind && a.mob == b.mob && a.job == b.job && a.gender == b.gender && a.hairStyle == b.hairStyle && a.hairColor == b.hairColor && a.bodyPalette == b.bodyPalette &&
 			a.head[0] == b.head[0] && a.head[1] == b.head[1] && a.head[2] == b.head[2] && a.costume[0] == b.costume[0] && a.costume[1] == b.costume[1] && a.costume[2] == b.costume[2] &&
 			a.robe == b.robe && a.weapon == b.weapon && a.shield == b.shield && a.customWing == b.customWing && memcmp(a.wingOff, b.wingOff, sizeof(a.wingOff)) == 0;
 	}
@@ -272,6 +276,43 @@ namespace sprite
 	static glm::vec3 toWorld(const glm::vec3& p, Gnd* g) { return glm::vec3(5 * g->width + p.x, -p.y, 10 + 5 * g->height - p.z); }
 	static glm::vec3 toRsw(const glm::vec3& w, Gnd* g) { return glm::vec3(w.x - 5 * g->width, -w.y, 10 + 5 * g->height - w.z); }
 
+	static const glm::vec3 NO_HIT(std::numeric_limits<float>().max());
+
+	// height of the walkable surface (GAT) or the ground (GND) below a world x/z position
+	static bool surfaceHeight(Map* map, Gnd* gnd, bool useGat, float x, float z, float& y)
+	{
+		if (useGat)
+			if (auto gat = map->rootNode->getComponent<Gat>())
+			{
+				int cx = (int)floorf(x / 5.0f), cy = (int)floorf((5.0f * gat->height + 10.0f - z) / 5.0f);
+				auto r = gat->rayCast(math::Ray(glm::vec3(x, 3000, z), glm::vec3(0, -1, 0)), cx - 1, cy - 2, cx + 2, cy + 3);
+				if (r != NO_HIT) { y = r.y; return true; }
+			}
+		auto r = gnd->rayCast(math::Ray(glm::vec3(x, 3000, z), glm::vec3(0, -1, 0)));
+		if (r != NO_HIT) { y = r.y; return true; }
+		return false;
+	}
+
+	// where the cursor is on the map (GAT surface when 'useGat', else the ground), with grid snapping like objects
+	static bool cursorGround(MapView* mv, Gnd* gnd, bool useGat, glm::vec3& out)
+	{
+		glm::vec3 hit = NO_HIT;
+		if (useGat)
+			if (auto gat = mv->map->rootNode->getComponent<Gat>()) hit = gat->rayCast(mv->mouseRay);
+		if (hit == NO_HIT) hit = gnd->rayCast(mv->mouseRay);
+		if (hit == NO_HIT) return false;
+		bool snap = mv->snapToGrid;
+		if (ImGui::GetIO().KeyShift) snap = !snap;
+		if (snap)
+		{
+			hit.x = glm::round((hit.x - mv->gridOffsetTranslate) / mv->gridSizeTranslate) * mv->gridSizeTranslate + mv->gridOffsetTranslate;
+			hit.z = glm::round((hit.z - mv->gridOffsetTranslate) / mv->gridSizeTranslate) * mv->gridSizeTranslate + mv->gridOffsetTranslate;
+			float y; if (surfaceHeight(mv->map, gnd, useGat, hit.x, hit.z, y)) hit.y = y;
+		}
+		out = hit;
+		return true;
+	}
+
 	// direction of the frame to show: the character's own direction turned by where the camera looks from
 	static int viewDir(const glm::mat4& view, int dir)
 	{
@@ -295,16 +336,9 @@ namespace sprite
 		bool ghost = placing && be->editMode == BrowEdit::EditMode::Sprite && mv->hovered;
 		if (ghost)
 		{
-			auto hit = gnd->rayCast(mv->mouseRay);
-			if (hit != glm::vec3(std::numeric_limits<float>().max()))
+			glm::vec3 hit;
+			if (cursorGround(mv, gnd, snapToGat, hit))
 			{
-				bool snap = mv->snapToGrid;
-				if (ImGui::GetIO().KeyShift) snap = !snap;
-				if (snap)
-				{
-					hit.x = glm::round((hit.x - mv->gridOffsetTranslate) / mv->gridSizeTranslate) * mv->gridSizeTranslate + mv->gridOffsetTranslate;
-					hit.z = glm::round((hit.z - mv->gridOffsetTranslate) / mv->gridSizeTranslate) * mv->gridSizeTranslate + mv->gridOffsetTranslate;
-				}
 				impl->ghostValid = true; impl->ghostWorld = hit;
 				draft.pos = toRsw(hit, gnd);
 			}
@@ -481,8 +515,8 @@ namespace sprite
 		{
 			if (ImGui::IsMouseDown(0))
 			{
-				auto hit = gnd->rayCast(mv->mouseRay);
-				if (hit != glm::vec3(std::numeric_limits<float>().max()))
+				glm::vec3 hit;
+				if (cursorGround(mv, gnd, snapToGat, hit))
 				{
 					glm::vec3 d = hit - impl->dragStartWorld;
 					if (glm::length(d) > 0.01f) impl->dragMoved = true;
@@ -491,8 +525,8 @@ namespace sprite
 						auto* in = L.find(kv.first);
 						if (!in) continue;
 						glm::vec3 w = toWorld(kv.second, gnd) + glm::vec3(d.x, 0, d.z);
-						auto h = gnd->rayCast(math::Ray(glm::vec3(w.x, 2000, w.z), glm::vec3(0, -1, 0)));
-						if (h != glm::vec3(std::numeric_limits<float>().max())) w.y = h.y; else w.y = -kv.second.y;
+						float hy;
+						if (surfaceHeight(mv->map, gnd, snapToGat, w.x, w.z, hy)) w.y = hy; else w.y = -kv.second.y;
 						in->pos = toRsw(w, gnd);
 					}
 				}
@@ -526,8 +560,8 @@ namespace sprite
 					else if (!L.selected.count(hit)) L.selected = { hit };
 					if (L.selected.count(hit) && !io.KeyCtrl)
 					{
-						auto h = gnd->rayCast(mv->mouseRay);
-						if (h != glm::vec3(std::numeric_limits<float>().max()))
+						glm::vec3 h;
+						if (cursorGround(mv, gnd, snapToGat, h))
 						{
 							impl->dragging = true; impl->dragMoved = false; impl->dragStartWorld = h; impl->dragBefore = L;
 							impl->dragOrig.clear();
@@ -537,7 +571,19 @@ namespace sprite
 					}
 				}
 			}
-			else if (!io.KeyCtrl && !io.KeyShift)
+			else if (io.KeyCtrl)
+			{	// Ctrl + left click on the ground: add the sprite from the panel right here
+				glm::vec3 w;
+				if (cursorGround(mv, gnd, snapToGat, w))
+				{
+					MapLayer before = L;
+					Instance in = instanceFromDraft(draft);
+					in.id = L.nextId++; in.pos = toRsw(w, gnd);
+					L.items.push_back(in); L.selected = { in.id };
+					pushLayerAction(mv->map, be, L, before, "Add sprite " + in.name);
+				}
+			}
+			else if (!io.KeyShift)
 				L.selected.clear();
 		}
 

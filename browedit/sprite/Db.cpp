@@ -17,6 +17,7 @@ namespace sprite
 	std::string Db::robePath(const GearEntry& e, const std::string& job, int g) { return "data\\sprite\\\xEB\xA1\x9C\xEB\xB8\x8C\\" + e.sprite + B + g2(g) + B + job + "_" + g2(g); }
 	std::string Db::weaponPath(const GearEntry& e, const std::string& job, int g) { return "data\\sprite\\\xEC\x9D\xB8\xEA\xB0\x84\xEC\xA1\xB1\\" + job + B + job + "_" + g2(g) + e.sprite; }
 	std::string Db::shieldPath(const std::string& s, const std::string& job, int g) { return "data\\sprite\\\xEB\xB0\xA9\xED\x8C\xA8\\" + job + B + job + "_" + g2(g) + s; }
+	std::string Db::mobPath(int kind, const std::string& n) { return (kind == 1 ? "data\\sprite\\\xEB\xAA\xAC\xEC\x8A\xA4\xED\x84\xB0\\" : "data\\sprite\\npc\\") + n; }
 	std::string Db::imfPath(const std::string& job, int g) { return "data\\imf\\" + job + "_" + g2(g) + ".imf"; }
 
 	bool Db::exists(const std::string& path) const { return files.find(lower(path)) != files.end(); }
@@ -185,6 +186,23 @@ namespace sprite
 				}
 			}
 			shields.assign(found.begin(), found.end());
+		}
+		for (int kind = 1; kind <= 2; kind++)
+		{
+			auto& out = kind == 1 ? monsters : npcs;
+			out.clear();
+			std::string md = lower(mobPath(kind, ""));
+			for (auto& kv : files)
+			{
+				if (kv.first.compare(0, md.size(), md) != 0 || !endsWith(kv.first, ".spr")) continue;
+				std::string stem = kv.first.substr(md.size(), kv.first.size() - md.size() - 4);
+				if (stem.find('\\') != std::string::npos || !files.count(md + stem + ".act")) continue;
+				MobEntry e; e.sprite = kv.second.substr(md.size(), kv.second.size() - md.size() - 4); e.label = titleCase(e.sprite);
+				auto it = jobConsts.find(stem);
+				e.id = it == jobConsts.end() ? -1 : it->second;
+				out.push_back(e);
+			}
+			std::sort(out.begin(), out.end(), [](const MobEntry& a, const MobEntry& b) { return lower(a.label) < lower(b.label); });
 		}
 		customWings.clear();
 		{

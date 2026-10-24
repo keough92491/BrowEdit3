@@ -16,6 +16,7 @@ namespace sprite
 		// ---- asset state
 		int scanVersion = 0;
 		int optsVersion = -1;
+		std::vector<Opt> mobOpts[3];
 		std::vector<Opt> jobOpts, headgearOpts[2], robeOpts[2], weaponOpts[2];
 		std::map<Map*, MapLayer> layers;
 
