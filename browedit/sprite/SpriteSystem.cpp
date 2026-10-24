@@ -394,6 +394,7 @@ namespace sprite
 		std::sort(order.begin(), order.end(), [](const Item& a, const Item& b) { return a.depth > b.depth; });
 
 		// shadows first (flat ellipse on the ground)
+		glDepthMask(0);	// the shadow must not hide the sprites standing in the same plane
 		if (showShadow)
 			for (auto& it : order)
 			{
@@ -414,6 +415,7 @@ namespace sprite
 				glDrawArrays(GL_POLYGON, 0, 24);
 			}
 
+		glDepthMask(1);
 		for (auto& it : order)
 		{
 			const Instance& in = *it.in;
