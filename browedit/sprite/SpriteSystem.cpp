@@ -33,6 +33,7 @@ namespace sprite
 	{
 		nlohmann::json j;
 		j["id"] = id; j["name"] = name;
+		j["headMode"] = cfg.headMode;
 		j["kind"] = cfg.kind == 0 ? "player" : cfg.kind == 1 ? "monster" : "npc"; j["mob"] = cfg.mob;
 		j["job"] = cfg.job;
 		auto je = db.job(cfg.job);
@@ -55,7 +56,7 @@ namespace sprite
 		i.id = j.value("id", 0); i.name = j.value("name", std::string("Sprite"));
 		auto& c = i.cfg;
 		{ std::string k = j.value("kind", std::string("player")); c.kind = k == "monster" ? 1 : k == "npc" ? 2 : 0; }
-		c.mob = j.value("mob", std::string());
+		c.mob = j.value("mob", std::string()); c.headMode = j.value("headMode", 0);
 		c.job = j.value("job", c.job);
 		c.gender = j.value("gender", std::string("male")) == "female" ? Female : Male;
 		c.hairStyle = j.value("hairStyle", 1); c.hairColor = j.value("hairColor", 0); c.bodyPalette = j.value("bodyPalette", -1);
@@ -238,7 +239,7 @@ namespace sprite
 
 	static bool sameCfg(const CharacterConfig& a, const CharacterConfig& b)
 	{
-		return a.kind == b.kind && a.mob == b.mob && a.job == b.job && a.gender == b.gender && a.hairStyle == b.hairStyle && a.hairColor == b.hairColor && a.bodyPalette == b.bodyPalette &&
+		return a.headMode == b.headMode && a.kind == b.kind && a.mob == b.mob && a.job == b.job && a.gender == b.gender && a.hairStyle == b.hairStyle && a.hairColor == b.hairColor && a.bodyPalette == b.bodyPalette &&
 			a.head[0] == b.head[0] && a.head[1] == b.head[1] && a.head[2] == b.head[2] && a.costume[0] == b.costume[0] && a.costume[1] == b.costume[1] && a.costume[2] == b.costume[2] &&
 			a.robe == b.robe && a.weapon == b.weapon && a.shield == b.shield && a.customWing == b.customWing && memcmp(a.wingOff, b.wingOff, sizeof(a.wingOff)) == 0;
 	}
@@ -333,7 +334,7 @@ namespace sprite
 		if (!db.ready) return;
 		impl->freeDropped(*this);
 		impl->ghostValid = false;
-		bool ghost = placing && be->editMode == BrowEdit::EditMode::Sprite && mv->hovered;
+		bool ghost = (placing || browserDrag || browserDrop) && be->editMode == BrowEdit::EditMode::Sprite && mv->hovered;
 		if (ghost)
 		{
 			glm::vec3 hit;
@@ -493,6 +494,16 @@ namespace sprite
 		double time = ImGui::GetTime();
 		bool typing = io.WantTextInput;
 
+		if (browserDrop && mv->hovered && impl->ghostValid)
+		{	// a sprite dragged out of the Sprite Browser was dropped on the map
+			browserDrop = false;
+			MapLayer before = L;
+			Instance in = instanceFromDraft(draft);
+			in.id = L.nextId++; in.pos = toRsw(impl->ghostWorld, gnd);
+			L.items.push_back(in); L.selected = { in.id };
+			pushLayerAction(mv->map, be, L, before, "Add sprite " + in.name);
+			return;
+		}
 		if (placing)
 		{
 			if (!typing && ImGui::IsKeyPressed(GLFW_KEY_ESCAPE)) { placing = false; return; }

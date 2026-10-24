@@ -27,6 +27,7 @@ namespace sprite
 		int id = -1;			// client job id (-1 = not known)
 		bool has[2] = { false,false };
 		bool imf[2] = { false,false };
+		int group = 7;			// see Db::groupNames
 	};
 	struct GearEntry
 	{
@@ -41,6 +42,8 @@ namespace sprite
 	class Db
 	{
 	public:
+		static inline const char* groupNames[8] = { "1st class", "2nd class", "Alternate class", "Expanded class", "Transcendent / Rebirth", "3rd class", "4th class", "Others" };
+		static int jobGroup(int id);
 		// metadata exported from the client lua tables by tools/spritedb/gen_spritedb.py
 		bool loadMeta(const std::string& jsonText, std::string& error);
 		// scans what exists (can run on a worker thread; set ready when done)

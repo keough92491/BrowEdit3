@@ -20,6 +20,18 @@ namespace sprite
 	std::string Db::mobPath(int kind, const std::string& n) { return (kind == 1 ? "data\\sprite\\\xEB\xAA\xAC\xEC\x8A\xA4\xED\x84\xB0\\" : "data\\sprite\\npc\\") + n; }
 	std::string Db::imfPath(const std::string& job, int g) { return "data\\imf\\" + job + "_" + g2(g) + ".imf"; }
 
+	int Db::jobGroup(int id)
+	{
+		if (id >= 0 && id <= 6) return 0;
+		if ((id >= 7 && id <= 12) || (id >= 14 && id <= 20)) return 1;
+		if (id >= 4046 && id <= 4049) return 2;
+		if (id == 23 || id == 24 || id == 25 || id == 4190 || id == 4191 || (id >= 4211 && id <= 4221)) return 3;
+		if (id >= 4001 && id <= 4022 && id != 4014 && id != 4022) return 4;
+		if (id >= 4054 && id <= 4095) return 5;
+		if ((id >= 4252 && id <= 4281) || (id >= 4302 && id <= 4316)) return 6;
+		return 7;
+	}
+
 	bool Db::exists(const std::string& path) const { return files.find(lower(path)) != files.end(); }
 	std::string Db::actual(const std::string& path) const { auto it = files.find(lower(path)); return it == files.end() ? path : it->second; }
 	bool Db::hasPrefix(const std::string& d) const { return dirs.find(lower(d)) != dirs.end(); }
@@ -155,7 +167,8 @@ namespace sprite
 			for (auto& kv : hairColors[g]) std::sort(kv.second.begin(), kv.second.end());
 			for (auto& kv : bodyPalettes[g]) std::sort(kv.second.begin(), kv.second.end());
 		}
-		std::sort(jobs.begin(), jobs.end(), [](const JobEntry& a, const JobEntry& b) { return a.label < b.label; });
+		for (auto& j : jobs) j.group = jobGroup(j.id);
+		std::sort(jobs.begin(), jobs.end(), [](const JobEntry& a, const JobEntry& b) { return a.group != b.group ? a.group < b.group : a.label < b.label; });
 		jobs.erase(std::remove_if(jobs.begin(), jobs.end(), [](const JobEntry& j) { return !j.has[0] && !j.has[1]; }), jobs.end());
 
 		auto fill = [&](std::vector<GearEntry>& out, const std::vector<GearEntry>& meta, auto exists2)

@@ -7,6 +7,7 @@
 #include <browedit/Node.h>
 #include <browedit/components/Gnd.h>
 #include <imgui.h>
+#include <GLFW/glfw3.h>
 #include <algorithm>
 #include <cstring>
 #include <fstream>
@@ -75,6 +76,35 @@ namespace sprite
 		}
 	}
 
+	// job dropdown sorted into groups (1st class, 2nd class, ...), with search
+	static bool jobCombo(const char* label, const std::string& preview, const Db& db, const std::vector<Opt>& labels, int gender, int& sel, bool showUnavailable)
+	{
+		bool changed = false;
+		if (ImGui::BeginCombo(label, preview.c_str()))
+		{
+			static std::string f;
+			bool appearing = ImGui::IsWindowAppearing();
+			if (appearing) { ImGui::SetKeyboardFocusHere(); f.clear(); }
+			ImGui::SetNextItemWidth(-1);
+			inputStr("##jobsearch", f, 64);
+			int curGroup = sel >= 0 && sel < (int)db.jobs.size() ? db.jobs[sel].group : -1;
+			for (int grp = 0; grp < 8; grp++)
+			{
+				std::vector<int> idx;
+				for (int i = 0; i < (int)db.jobs.size(); i++)
+					if (db.jobs[i].group == grp && (db.jobs[i].has[gender] || showUnavailable) && containsNoCase(labels[i].label, f)) idx.push_back(i);
+				if (idx.empty()) continue;
+				if (!f.empty()) ImGui::SetNextItemOpen(true, ImGuiCond_Always);
+				else if (appearing) ImGui::SetNextItemOpen(grp == curGroup, ImGuiCond_Always);
+				if (ImGui::CollapsingHeader((std::string(Db::groupNames[grp]) + " (" + std::to_string(idx.size()) + ")").c_str()))
+					for (int i : idx)
+						if (ImGui::Selectable((labels[i].label + "##j" + std::to_string(i)).c_str(), i == sel)) { sel = i; changed = true; }
+			}
+			ImGui::EndCombo();
+		}
+		return changed;
+	}
+
 	static std::string actionLabel(const CharacterConfig& c, int a)
 	{
 		if (c.kind == 0) return actionDefs[std::min(std::max(a, 0), actionDefCount - 1)].name;
@@ -111,7 +141,7 @@ namespace sprite
 			auto& list = k == 1 ? s.db.monsters : s.db.npcs;
 			for (size_t i = 0; i < list.size(); i++) mobOpts[k].push_back({ (int)i + 1, list[i].label + (list[i].id >= 0 ? " [" + std::to_string(list[i].id) + "]" : ""), true });
 		}
-		thumbs.clear();
+		thumbs.clear(); mobThumbs.clear();
 	}
 
 	void System::Impl::applyJobChange(System& s, CharacterConfig& c, const std::string& newJob, int newGender)
@@ -251,6 +281,9 @@ namespace sprite
 	{
 		ensureReady(be);
 		auto& im = *impl;
+		browserDrop = false;
+		if (browserDrag && !ImGui::IsMouseDown(0)) { browserDrag = false; browserDrop = true; }
+		if (browserDrag && ImGui::IsKeyPressed(GLFW_KEY_ESCAPE)) browserDrag = false;
 		im.ensureOpts(*this);
 		auto* mv = be->activeMapView;
 		Map* map = mv ? mv->map : nullptr;
@@ -342,14 +375,17 @@ namespace sprite
 				for (size_t i = 0; i < db.jobs.size(); i++) if (db.jobs[i].sprite == c.job) jobIdx = (int)i;
 				std::string jobPreview = jobIdx >= 0 ? db.jobs[jobIdx].label + "  [" + c.job + "]" : c.job;
 				int sel = jobIdx;
-				std::vector<Opt> jopts = im.jobOpts;
-				for (auto& o : jopts) o.ok = db.jobs[o.id].has[g];
-				if (searchCombo("Job class", jobPreview, jopts, sel, im.showUnavailable, false) && sel >= 0)
+				if (jobCombo("Job class", jobPreview, db, im.jobOpts, g, sel, im.showUnavailable) && sel >= 0)
 					im.applyJobChange(*this, c, db.jobs[sel].sprite, g);
 				int gsel = g;
 				if (ImGui::RadioButton("Male", g == Male)) gsel = Male;
 				ImGui::SameLine(); if (ImGui::RadioButton("Female", g == Female)) gsel = Female;
 				if (gsel != g) { im.applyJobChange(*this, c, c.job, gsel); g = gsel; }
+				{
+					const char* hm[] = { "Moving head (animated)", "Steady head - straight", "Steady head - pose 2", "Steady head - pose 3" };
+					ImGui::SetNextItemWidth(220);
+					ImGui::Combo("Head movement", &c.headMode, hm, 4);
+				}
 
 				// hairstyle / colour
 				{
@@ -577,6 +613,8 @@ namespace sprite
 		}
 		ImGui::End();
 
+		if (showBrowser) drawBrowser(be);
+
 		// ---------- object list
 		if (showList && map)
 		{
@@ -627,6 +665,92 @@ namespace sprite
 				}
 			}
 			ImGui::End();
+		}
+	}
+}
+
+namespace sprite
+{
+	// grid of all monster / npc sprites found in the data: click to choose, drag onto the map to place
+	void System::drawBrowser(BrowEdit* be)
+	{
+		auto& im = *impl;
+		if (!db.ready) return;
+		ImGui::SetNextWindowSize(ImVec2(460, 520), ImGuiCond_FirstUseEver);
+		if (ImGui::Begin("Sprite Browser", &showBrowser))
+		{
+			const char* tabs[] = { "Monsters", "NPCs" };
+			for (int t = 0; t < 2; t++)
+			{
+				if (t) ImGui::SameLine();
+				if (ImGui::RadioButton((std::string(tabs[t]) + " (" + std::to_string(t == 0 ? db.monsters.size() : db.npcs.size()) + ")").c_str(), im.browserTab == t)) im.browserTab = t;
+			}
+			ImGui::SetNextItemWidth(160); inputStr("Search##browser", im.browserFilter, 48);
+			ImGui::SameLine(); ImGui::SetNextItemWidth(100); ImGui::SliderFloat("Size", &im.thumbSize, 48, 160, "%.0f");
+			int kind = im.browserTab + 1;
+			auto& list = kind == 1 ? db.monsters : db.npcs;
+			if (list.empty())
+				ImGui::TextColored(ImVec4(1, 0.5f, 0.4f, 1), "No %s sprites found in your data (data\\sprite\\%s).", kind == 1 ? "monster" : "npc", kind == 1 ? "monster folder" : "npc");
+			ImGui::TextDisabled("Click to choose it for the Sprite Editor, drag it onto the map to place it. Ctrl+click on the map also adds the chosen one.");
+			std::vector<const MobEntry*> shown;
+			for (auto& e : list) if (containsNoCase(e.label + " " + e.sprite, im.browserFilter)) shown.push_back(&e);
+
+			ImGui::BeginChild("##grid", ImVec2(0, 0), true);
+			float cell = im.thumbSize, pad = 6, lh = ImGui::GetTextLineHeight() + 4;
+			int cols = std::max(1, (int)((ImGui::GetContentRegionAvail().x + pad) / (cell + pad)));
+			int rows = ((int)shown.size() + cols - 1) / cols;
+			ImGuiListClipper clip;
+			clip.Begin(rows, cell + lh + pad);
+			const MobEntry* dragged = nullptr;
+			while (clip.Step())
+				for (int r = clip.DisplayStart; r < clip.DisplayEnd; r++)
+					for (int cI = 0; cI < cols; cI++)
+					{
+						int i = r * cols + cI;
+						if (i >= (int)shown.size()) break;
+						auto& e = *shown[i];
+						if (cI) ImGui::SameLine(0, pad);
+						ImGui::PushID(i + kind * 100000);
+						ImVec2 p = ImGui::GetCursorScreenPos();
+						ImGui::InvisibleButton("##cell", ImVec2(cell, cell + lh));
+						bool hov = ImGui::IsItemHovered();
+						bool isCur = draft.cfg.kind == kind && draft.cfg.mob == e.sprite;
+						if (ImGui::IsItemClicked(0) || (ImGui::IsItemActive() && ImGui::IsMouseDragging(0, 5) && !(isCur)))
+						{
+							draft.cfg.kind = kind; draft.cfg.mob = e.sprite; draft.action = 0; draft.name = e.label; im.previewTime = 0; im.notice.clear();
+						}
+						if (ImGui::IsItemActive() && ImGui::IsMouseDragging(0, 5)) { dragged = &e; browserDrag = true; }
+						std::string key = std::to_string(kind) + ":" + e.sprite;
+						auto& th = im.mobThumbs[key];
+						if (!th) { CharacterConfig cc; cc.kind = kind; cc.mob = e.sprite; th = composer.frame(cc, 0, 0, 0); }
+						auto* dl = ImGui::GetWindowDrawList();
+						dl->AddRectFilled(p, ImVec2(p.x + cell, p.y + cell + lh), isCur ? IM_COL32(90, 120, 40, 200) : hov ? IM_COL32(80, 80, 95, 255) : IM_COL32(45, 45, 52, 255), 4);
+						if (th && th->w > 0)
+						{
+							float z = std::min((cell - 6) / th->w, (cell - 6) / th->h); z = std::min(z, 2.0f);
+							ImVec2 a(p.x + (cell - th->w * z) * 0.5f, p.y + cell - 3 - th->h * z);
+							dl->AddImage((ImTextureID)(intptr_t)im.tex(*th), a, ImVec2(a.x + th->w * z, a.y + th->h * z));
+						}
+						else dl->AddText(ImVec2(p.x + 6, p.y + cell * 0.4f), IM_COL32(200, 120, 120, 255), "no image");
+						std::string name = e.label;
+						int maxChars = std::max(4, (int)(cell / 7));
+						if ((int)name.size() > maxChars) name = name.substr(0, maxChars - 1) + "~";
+						dl->AddText(ImVec2(p.x + 3, p.y + cell + 1), IM_COL32(230, 230, 230, 255), name.c_str());
+						if (hov && !browserDrag) ImGui::SetTooltip("%s%s", e.sprite.c_str(), e.id >= 0 ? (" (id " + std::to_string(e.id) + ")").c_str() : "");
+						ImGui::PopID();
+					}
+			ImGui::EndChild();
+		}
+		ImGui::End();
+		if (browserDrag)
+		{	// the sprite follows the cursor until it is dropped (on the map it becomes a ghost)
+			std::string key = std::to_string(draft.cfg.kind) + ":" + draft.cfg.mob;
+			auto it = im.mobThumbs.find(key);
+			if (it != im.mobThumbs.end() && it->second && it->second->w > 0)
+			{
+				auto& f = *it->second; ImVec2 m = ImGui::GetMousePos(); float z = std::min(1.0f, 80.0f / std::max(f.w, f.h));
+				ImGui::GetForegroundDrawList()->AddImage((ImTextureID)(intptr_t)im.tex(f), ImVec2(m.x - f.ox * z, m.y - f.oy * z), ImVec2(m.x + (f.w - f.ox) * z, m.y + (f.h - f.oy) * z), ImVec2(0, 0), ImVec2(1, 1), IM_COL32(255, 255, 255, 170));
+			}
 		}
 	}
 }

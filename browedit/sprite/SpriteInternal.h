@@ -34,6 +34,10 @@ namespace sprite
 		std::vector<int> actionsAvail;
 		std::map<int, std::shared_ptr<Frame>> thumbs;
 		std::string renameBuf;
+		std::map<std::string, std::shared_ptr<Frame>> mobThumbs;
+		std::string browserFilter;
+		int browserTab = 0;
+		float thumbSize = 72;
 
 		// ---- placing / editing
 		std::vector<Instance> clipboard;

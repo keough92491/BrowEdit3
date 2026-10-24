@@ -16,7 +16,7 @@ namespace sprite
 	nlohmann::json CharacterConfig::toJson() const
 	{
 		nlohmann::json j;
-		j["kind"] = kind; j["mob"] = mob; j["job"] = job; j["gender"] = gender; j["hairStyle"] = hairStyle; j["hairColor"] = hairColor; j["bodyPalette"] = bodyPalette;
+		j["headMode"] = headMode; j["kind"] = kind; j["mob"] = mob; j["job"] = job; j["gender"] = gender; j["hairStyle"] = hairStyle; j["hairColor"] = hairColor; j["bodyPalette"] = bodyPalette;
 		j["head"] = { head[0], head[1], head[2] }; j["costume"] = { costume[0], costume[1], costume[2] };
 		j["robe"] = robe; j["weapon"] = weapon; j["shield"] = shield; j["customWing"] = customWing;
 		nlohmann::json o = nlohmann::json::array();
@@ -27,7 +27,7 @@ namespace sprite
 	CharacterConfig CharacterConfig::fromJson(const nlohmann::json& j)
 	{
 		CharacterConfig c;
-		c.kind = j.value("kind", 0); c.mob = j.value("mob", std::string()); c.job = j.value("job", c.job); c.gender = j.value("gender", 0); c.hairStyle = j.value("hairStyle", 1); c.hairColor = j.value("hairColor", 0);
+		c.headMode = j.value("headMode", 0); c.kind = j.value("kind", 0); c.mob = j.value("mob", std::string()); c.job = j.value("job", c.job); c.gender = j.value("gender", 0); c.hairStyle = j.value("hairStyle", 1); c.hairColor = j.value("hairColor", 0);
 		c.bodyPalette = j.value("bodyPalette", -1);
 		if (j.contains("head")) for (int i = 0; i < 3; i++) c.head[i] = j["head"][i];
 		if (j.contains("costume")) for (int i = 0; i < 3; i++) c.costume[i] = j["costume"][i];
@@ -169,7 +169,7 @@ namespace sprite
 
 		const int W = 480, H = 480, OX = 240, OY = 340;
 		ro::Canvas cv(W, H, OX, OY);
-		auto anchorOf = [&](const Layer& l, int& x, int& y)
+		auto anchorOf = [&](const Layer& l, int& x, int& y, int fr)
 		{
 			x = y = 0;
 			if (a < (int)l.a->actions.size() && !l.a->actions[a].frames.empty())
@@ -178,7 +178,7 @@ namespace sprite
 				if (!F.anchors.empty()) { x = F.anchors[0].x; y = F.anchors[0].y; }
 			}
 		};
-		int bx = 0, by = 0; anchorOf(s.layers[0], bx, by);
+		int bx = 0, by = 0; anchorOf(s.layers[0], bx, by, fr);
 		// body / head order through the IMF (lower value = in front); without one the head is in front
 		bool headBehind = false;
 		if (s.imf)
@@ -197,13 +197,15 @@ namespace sprite
 		for (auto* l : sorted)
 		{
 			int dx = 0, dy = 0;
+			// steady head: the head and what sits on it keep one pose while the body goes on
+			int lf = (c.headMode > 0 && (l->what == "head" || l->what == "gear")) ? c.headMode - 1 : fr;
 			if (l->attach == 1)
 			{
-				int ax, ay; anchorOf(*l, ax, ay);
+				int ax, ay; anchorOf(*l, ax, ay, lf);
 				dx = bx - ax; dy = by - ay;
 			}
 			ro::Part p; p.spr = l->s.get(); p.act = l->a.get(); p.pal = l->p.get();
-			ro::drawFrame(cv, p, a, fr, dx + l->extraX, dy + l->extraY);
+			ro::drawFrame(cv, p, a, lf, dx + l->extraX, dy + l->extraY);
 		}
 		int x0 = W, y0 = H, x1 = -1, y1 = -1;
 		for (int y = 0; y < H; y++) for (int x = 0; x < W; x++) if (cv.rgba[((size_t)y * W + x) * 4 + 3] > 0) { x0 = std::min(x0, x); y0 = std::min(y0, y); x1 = std::max(x1, x); y1 = std::max(y1, y); }

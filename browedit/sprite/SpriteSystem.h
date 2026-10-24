@@ -76,6 +76,9 @@ namespace sprite
 		Draft draft;
 		bool placing = false;			// ADD TO MAP pressed: the ghost follows the cursor
 		bool showShadow = true;
+		bool browserDrag = false, browserDrop = false;	// a sprite is being dragged out of the Sprite Browser / was just dropped
+		bool showBrowser = true;
+		void drawBrowser(BrowEdit* browEdit);
 		bool snapToGat = true;			// stand on the GAT height (else on the ground mesh)
 		bool showList = true;
 		std::vector<Preset> presets;

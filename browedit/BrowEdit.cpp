@@ -627,7 +627,7 @@ void BrowEdit::showMapWindow(MapView& mapView, float deltaTime)
 		ImTextureID id = (ImTextureID)((long long)mapView.fbo->texid[0]); //TODO: remove cast for 32bit
 		ImGui::ImageButton(id, size, ImVec2(0,1), ImVec2(1,0), 0, ImVec4(0,0,0,1), ImVec4(1,1,1,1));
 		//ImGui::Image(id, size, ImVec2(0, 1), ImVec2(1, 0));
-		mapView.hovered = ImGui::IsItemHovered() || ImGui::IsItemClicked();
+		mapView.hovered = ImGui::IsItemHovered((sprite::System::instance().browserDrag || sprite::System::instance().browserDrop) ? ImGuiHoveredFlags_AllowWhenBlockedByActiveItem : 0) || ImGui::IsItemClicked();
 
 		if (&mapView == activeMapView)
 		{
