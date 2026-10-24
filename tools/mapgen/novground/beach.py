@@ -75,7 +75,7 @@ for n_, (x, y) in enumerate(cand):
     tiles.append([x, y, 300 + k, round(u0, 5), round(v1, 5), round(u1, 5), round(v1, 5), round(u0, 5), round(v0, 5), round(u1, 5), round(v0, 5)])
 json.dump({"commands": [{"cmd": "tiles", "list": tiles}]}, open(OUT + "beach_t.json", "w"), separators=(",", ":"))
 for k in range(natl):
-    Image.fromarray(atl[k]).quantize(colors=256, method=Image.Quantize.MEDIANCUT, dither=Image.Dither.FLOYDSTEINBERG).save(OUT + "prt_novbf%02d.bmp" % (k + 1))
+    Image.fromarray(atl[k]).quantize(colors=256, method=Image.Quantize.MEDIANCUT, dither=Image.Dither.FLOYDSTEINBERG).save(OUT + "prt_novbg%02d.bmp" % (k + 1))
 # preview
 xs = [c[0] for c in cand]; ys = [c[1] for c in cand]; px0, px1, py0, py1 = min(xs) - 3, max(xs) + 4, min(ys) - 3, max(ys) + 4
 pv = np.zeros(((py1 - py0) * CELL, (px1 - px0) * CELL, 3), np.uint8)

@@ -281,7 +281,7 @@ def _pl(x, y):
     return [round(float(q), 5) for p in pts for q in p]
 for x, y, dirt in road_plain: tiles.append([x, y, 2 if dirt else 0] + _pl(x, y))
 for k in range(natl):
-    Image.fromarray(atl[k]).quantize(colors=256, method=Image.Quantize.MEDIANCUT, dither=Image.Dither.FLOYDSTEINBERG).save(OUT + "prt_novaq%02d.bmp" % (k + 1))
+    Image.fromarray(atl[k]).quantize(colors=256, method=Image.Quantize.MEDIANCUT, dither=Image.Dither.FLOYDSTEINBERG).save(OUT + "prt_novar%02d.bmp" % (k + 1))
 # gat
 gx, gy = np.meshgrid(X0 + (np.arange(2 * NXc) + 0.5) / 2, Y0 + (np.arange(2 * NYc) + 0.5) / 2, indexing="ij")
 gi = np.clip(((gx - X0) * R).astype(int), 0, NX - 1); gj = np.clip(((gy - Y0) * R).astype(int), 0, NY - 1)
