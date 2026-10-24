@@ -480,6 +480,8 @@ void BrowEdit::menuBar()
 		ImGui::MenuItem("Live lightmap (re-bake on edits)", nullptr, &liveLightmap);
 		if (ImGui::MenuItem("Make tiles unique"))
 			activeMapView->map->rootNode->getComponent<Gnd>()->makeTilesUnique();
+		if (ImGui::MenuItem("Clean unused tiles"))
+			activeMapView->map->rootNode->getComponent<Gnd>()->cleanTiles(false);
 		hotkeyMenuItem("Remove zero height walls", HotkeyAction::Global_ClearZeroHeightWalls);
 		if (ImGui::MenuItem("Remove unused ground textures"))
 			activeMapView->map->rootNode->getComponent<Gnd>()->removeUnusedTextures(this);
