@@ -16,8 +16,8 @@
 namespace
 {
 	// sizes / positions in the effect table are in "client units"; 1 unit = 5 map units, sizes additionally /35
-	const float POS = 5.0f;
-	const float SIZE = 1.0f / 7.0f;
+	const float FX_POS = 5.0f;
+	const float FX_SIZE = 1.0f / 7.0f;
 
 	float lerpf(float a, float b, float t) { return a + (b - a) * t; }
 
@@ -73,7 +73,7 @@ void FxRenderer::drawCylinder(NodeRenderContext& context, const glm::mat4& model
 
 	float r0 = fx->num("bottomSize", 1) * 10.0f, r1 = fx->num("topSize", 1) * 10.0f;
 	float h = fx->num("height", 35) / 35.0f * 10.0f;
-	float z0 = fx->num("posZ", 0) * POS;
+	float z0 = fx->num("posZ", 0) * FX_POS;
 	float alpha = fx->num("alphaMax", 1);
 	if (fx->num("fade", 0) > 0.5f || fx->num("fadeOut", 0) > 0.5f)
 		alpha *= glm::clamp((1.0f - t) * 3.0f, 0.0f, 1.0f);
@@ -190,8 +190,8 @@ void FxRenderer::render(NodeRenderContext& context)
 		if (fx->num("fadeOut", 0) > 0.5f) alpha *= glm::clamp((1.0f - t) * 3.0f, 0.0f, 1.0f);
 		glm::vec4 color(fx->num("red", 1), fx->num("green", 1), fx->num("blue", 1), alpha);
 
-		glm::mat4 m = glm::translate(base, glm::vec3(px * POS, pz * POS, py * POS));
-		float hw = sx * SIZE * 0.5f, hh = sy * SIZE * 0.5f;
+		glm::mat4 m = glm::translate(base, glm::vec3(px * FX_POS, pz * FX_POS, py * FX_POS));
+		float hw = sx * FX_SIZE * 0.5f, hh = sy * FX_SIZE * 0.5f;
 		float cx = 0, cy = 0;
 		if (fx->type == "2D")	// one end of the stretched image stays on the object
 		{
