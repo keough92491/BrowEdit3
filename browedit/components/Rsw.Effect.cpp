@@ -557,6 +557,26 @@ void attachEffectPreview(Node* node)
 	auto e = node->getComponent<RswEffect>();
 	if (!e || node->getComponent<StrEffect>() || node->getComponent<SprEffect>() || node->getComponent<LubEffect>() || node->getComponent<LubWindEffect>() || node->getComponent<EvilsPawEffect>())
 		return;
+	if (e->id == 44)	// EF_SMOKE is drawn by client code, not from a file: approximate it with a soft smoke emitter
+	{
+		auto le = new LubEffect();
+		le->texture = "smoke2.bmp";
+		le->gravity = glm::vec3(0, -1.5f, 0);
+		le->color = glm::vec4(0.8f, 0.8f, 0.8f, 0.5f);
+		le->rate = glm::vec2(2, 4);
+		le->size = glm::vec2(2, 5);
+		le->life = glm::vec2(2, 4);
+		le->scale = glm::vec2(1, 1);
+		le->speed = 0.3f;
+		le->srcmode = 5;
+		le->destmode = 6;
+		le->maxcount = 20;
+		le->zenable = 1;
+		le->eternity = 0;
+		node->addComponent(le);
+		node->addComponent(new LubRenderer());
+		return;
+	}
 	auto it = table.find(e->id);
 	if (it == table.end())
 	{
