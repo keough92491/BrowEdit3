@@ -25,6 +25,22 @@
 
 namespace sprite
 {
+	class CharShader : public gl::Shader
+	{
+	public:
+		CharShader() : gl::Shader("data/shaders/sprchar", Uniforms::End) { bindUniforms(); }
+		struct Uniforms { enum { projectionMatrix, cameraMatrix, modelMatrix, s_texture, color, depthBias, End }; };
+		void bindUniforms() override
+		{
+			bindUniform(Uniforms::projectionMatrix, "projectionMatrix");
+			bindUniform(Uniforms::cameraMatrix, "cameraMatrix");
+			bindUniform(Uniforms::modelMatrix, "modelMatrix");
+			bindUniform(Uniforms::s_texture, "s_texture");
+			bindUniform(Uniforms::color, "color");
+			bindUniform(Uniforms::depthBias, "depthBias");
+		}
+	};
+
 	const char* categories[] = { "Town Citizens", "Merchants", "Guards", "Adventurers", "Event NPCs", "Custom" };
 	const int categoryCount = 6;
 
@@ -265,7 +281,7 @@ namespace sprite
 	{
 		float x0 = -f.ox * ps, x1 = (f.w - f.ox) * ps, y1 = f.oy * ps, y0 = -(f.h - f.oy) * ps;
 		const float v[4][5] = { {x0, y0, 0, 0, 1}, {x0, y1, 0, 0, 0}, {x1, y1, 0, 1, 0}, {x1, y0, 0, 1, 1} };
-		shader->setUniform(SprRenderer::SprShader::Uniforms::color, color);
+		shader->setUniform(CharShader::Uniforms::color, color);
 		glActiveTexture(GL_TEXTURE0);
 		glBindTexture(GL_TEXTURE_2D, tex);
 		glVertexAttribPointer(0, 3, GL_FLOAT, false, 5 * sizeof(float), &v[0][0]);
@@ -348,7 +364,7 @@ namespace sprite
 
 		if (!impl->shader)
 		{
-			impl->shader = util::ResourceManager<gl::Shader>::load<SprRenderer::SprShader>();
+			impl->shader = util::ResourceManager<gl::Shader>::load<CharShader>();
 			glGenTextures(1, &impl->whiteTex);
 			unsigned char white[4] = { 255,255,255,255 };
 			glBindTexture(GL_TEXTURE_2D, impl->whiteTex);
@@ -359,9 +375,9 @@ namespace sprite
 		auto shader = impl->shader;
 		const glm::mat4& view = mv->nodeRenderContext.viewMatrix;
 		shader->use();
-		shader->setUniform(SprRenderer::SprShader::Uniforms::projectionMatrix, mv->nodeRenderContext.projectionMatrix);
-		shader->setUniform(SprRenderer::SprShader::Uniforms::cameraMatrix, view);
-		shader->setUniform(SprRenderer::SprShader::Uniforms::s_texture, 0);
+		shader->setUniform(CharShader::Uniforms::projectionMatrix, mv->nodeRenderContext.projectionMatrix);
+		shader->setUniform(CharShader::Uniforms::cameraMatrix, view);
+		shader->setUniform(CharShader::Uniforms::s_texture, 0);
 		glEnableVertexAttribArray(0); glEnableVertexAttribArray(1);
 		glDisableVertexAttribArray(2); glDisableVertexAttribArray(3); glDisableVertexAttribArray(4);
 		glBindBuffer(GL_ARRAY_BUFFER, 0);
@@ -400,8 +416,9 @@ namespace sprite
 			{
 				float r = 6.0f * basePs * it.in->scale * 1.8f;
 				glm::vec3 gw = it.world - glm::vec3(0, it.in->elevation, 0);
-				shader->setUniform(SprRenderer::SprShader::Uniforms::modelMatrix, glm::translate(glm::mat4(1.0f), gw));
-				shader->setUniform(SprRenderer::SprShader::Uniforms::color, glm::vec4(0, 0, 0, it.ghost ? 0.15f : 0.3f));
+				shader->setUniform(CharShader::Uniforms::modelMatrix, glm::translate(glm::mat4(1.0f), gw));
+				shader->setUniform(CharShader::Uniforms::color, glm::vec4(0, 0, 0, it.ghost ? 0.15f : 0.3f));
+				shader->setUniform(CharShader::Uniforms::depthBias, r * 1.2f);
 				glBindTexture(GL_TEXTURE_2D, impl->whiteTex);
 				std::vector<float> fan; fan.reserve(24 * 5);
 				for (int k = 0; k < 24; k++)
@@ -424,15 +441,16 @@ namespace sprite
 			if (!f || f->w <= 0) continue;
 			unsigned int t = impl->tex(*f);
 			if (!t) continue;
-			shader->setUniform(SprRenderer::SprShader::Uniforms::modelMatrix, glm::translate(glm::mat4(1.0f), it.world));
+			shader->setUniform(CharShader::Uniforms::modelMatrix, glm::translate(glm::mat4(1.0f), it.world));
 			float ps = basePs * in.scale;
+			shader->setUniform(CharShader::Uniforms::depthBias, f->h * ps * 0.8f);
 			bool sel = !it.ghost && L.selected.count(in.id);
 			drawFrameQuad(shader, t, *f, ps, it.ghost ? glm::vec4(1, 1, 1, 0.6f) : glm::vec4(1, 1, 1, 1));
 			if (sel)
 			{
 				float x0 = -f->ox * ps, x1 = (f->w - f->ox) * ps, y1 = f->oy * ps, y0 = -(f->h - f->oy) * ps;
 				const float v[4][5] = { {x0, y0, 0, 0, 0}, {x0, y1, 0, 0, 0}, {x1, y1, 0, 0, 0}, {x1, y0, 0, 0, 0} };
-				shader->setUniform(SprRenderer::SprShader::Uniforms::color, glm::vec4(1.0f, 0.85f, 0.2f, 1));
+				shader->setUniform(CharShader::Uniforms::color, glm::vec4(1.0f, 0.85f, 0.2f, 1));
 				glBindTexture(GL_TEXTURE_2D, impl->whiteTex);
 				glVertexAttribPointer(0, 3, GL_FLOAT, false, 5 * sizeof(float), &v[0][0]);
 				glVertexAttribPointer(1, 2, GL_FLOAT, false, 5 * sizeof(float), &v[0][3]);
