@@ -5,6 +5,8 @@
 #include <browedit/util/FileIO.h>
 #include <browedit/util/Util.h>
 #include <iostream>
+#include <cctype>
+#include <string>
 #include <stb/stb_image.h>
 
 namespace gl
