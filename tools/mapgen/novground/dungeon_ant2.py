@@ -1,5 +1,5 @@
 """Lower-right ant-nest dungeon, UL-style: smooth cave slopes, black rock ceiling, baked atlases (antflat floor + moss/mine rock).
-Layout traced from the user's 'Ant Nest' guide.  Writes an_h/an_g/an_t json + prt_novap%02d.bmp, preview an_pv.png."""
+Layout traced from the user's 'Ant Nest' guide.  Writes an_h/an_g/an_t json + prt_novaq%02d.bmp, preview an_pv.png."""
 import json, os, numpy as np, cv2
 from PIL import Image, ImageDraw
 from scipy import ndimage as ndi
@@ -183,7 +183,7 @@ _big = _lab == np.bincount(_lab[_lab > 0]).argmax()
 _loop = _big.astype(np.uint8) * 255
 cv2.line(_loop, (35, 250), (25, 300), 255, 5); _ff = _loop.copy(); _m = np.zeros((_ff.shape[0] + 2, _ff.shape[1] + 2), np.uint8); cv2.floodFill(_ff, _m, (3, 3), 128)
 loopS = (_ff != 128)
-RQ, RX0, RX1, RY0, RY1 = 8, 108, 168, 68, 122
+RQ, RX0, RX1, RY0, RY1 = 8, 116, 168, 68, 122
 rxs = RX0 + (np.arange((RX1 - RX0) * RQ) + 0.5) / RQ; rys = RY0 + (np.arange((RY1 - RY0) * RQ) + 0.5) / RQ
 RX, RY = np.meshgrid(rxs, rys, indexing="ij")
 _P = np.stack([RX.ravel(), RY.ravel(), np.ones(RX.size)]); _Q = np.linalg.inv(Hs) @ _P; _q = (_Q[:2] / _Q[2]).T
@@ -200,7 +200,7 @@ for _k in (9, 15, 21, 29, 41):
     if inloop.sum() > 2.2 * _tt.sum(): break
 print('road fill', _k, inloop.sum(), _tt.sum())
 old_f = ndi.map_coordinates(f3, [RX, RY], order=1, mode="nearest") > 0
-M = np.where((RX > 117.5) & (RY < 116.5), inloop, old_f)
+M = np.where((RX > 119.0) & (RY < 116.5), inloop, old_f)
 sdR = (ndi.distance_transform_edt(M) - ndi.distance_transform_edt(~M)) / RQ
 sdR = ndi.gaussian_filter(sdR, 0.45 * RQ)
 f4 = f3.copy()
@@ -281,7 +281,7 @@ def _pl(x, y):
     return [round(float(q), 5) for p in pts for q in p]
 for x, y, dirt in road_plain: tiles.append([x, y, 2 if dirt else 0] + _pl(x, y))
 for k in range(natl):
-    Image.fromarray(atl[k]).quantize(colors=256, method=Image.Quantize.MEDIANCUT, dither=Image.Dither.FLOYDSTEINBERG).save(OUT + "prt_novap%02d.bmp" % (k + 1))
+    Image.fromarray(atl[k]).quantize(colors=256, method=Image.Quantize.MEDIANCUT, dither=Image.Dither.FLOYDSTEINBERG).save(OUT + "prt_novaq%02d.bmp" % (k + 1))
 # gat
 gx, gy = np.meshgrid(X0 + (np.arange(2 * NXc) + 0.5) / 2, Y0 + (np.arange(2 * NYc) + 0.5) / 2, indexing="ij")
 gi = np.clip(((gx - X0) * R).astype(int), 0, NX - 1); gj = np.clip(((gy - Y0) * R).astype(int), 0, NY - 1)
