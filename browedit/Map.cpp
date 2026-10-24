@@ -1,3 +1,4 @@
+#include <browedit/sprite/SpriteSystem.h>
 #include <Windows.h>
 #include <shellapi.h>
 #include <browedit/Map.h>
@@ -72,6 +73,7 @@ Map::Map(const std::string& name, int width, int height, BrowEdit* browEdit) : n
 
 Map::~Map()
 {
+	sprite::System::instance().forget(this);
 	for (auto u : undoStack)
 		delete u;
 	for (auto u : redoStack)

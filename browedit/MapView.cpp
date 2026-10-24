@@ -1,4 +1,5 @@
 #define IMGUI_DEFINE_MATH_OPERATORS
+#include <browedit/sprite/SpriteSystem.h>
 #include <Windows.h>
 #include "MapView.h"
 #include "Map.h"
@@ -697,6 +698,8 @@ void MapView::render(BrowEdit* browEdit)
 			}
 		}
 	}
+	sprite::System::instance().render(this, browEdit);
+
 	if (skyTexture)
 	{
 		simpleShader->use();

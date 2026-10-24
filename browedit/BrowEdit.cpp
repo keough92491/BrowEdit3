@@ -1,3 +1,4 @@
+#include <browedit/sprite/SpriteSystem.h>
 #include "BrowEdit.h"
 #include "Version.h"
 #include <glad/gl.h>
@@ -288,6 +289,8 @@ void BrowEdit::run()
 			showShadowEditWindow();
 		if (editMode == EditMode::SkyMap)
 			showSkyMapEditWindow();
+		if (editMode == EditMode::Sprite)
+			sprite::System::instance().showWindows(this);
 
 		if (windowData.hotkeyEditWindowVisible)
 			showHotkeyEditorWindow();
@@ -613,6 +616,8 @@ void BrowEdit::showMapWindow(MapView& mapView, float deltaTime)
 					mapView.postRenderCinematicMode(this);
 				else if (editMode == EditMode::Water)
 					mapView.postRenderWaterMode(this);
+				else if (editMode == EditMode::Sprite)
+					sprite::System::instance().postRender(&mapView, this);
 			}
 
 
@@ -736,6 +741,7 @@ void BrowEdit::saveMap(Map* map)
 	map->rootNode->getComponent<Gat>()->save(gatName);
 	map->rootNode->getComponent<LubSkyMap>()->save(mapName, this);
 
+	sprite::System::instance().save(map, this);
 	map->changed = false;
 }
 
