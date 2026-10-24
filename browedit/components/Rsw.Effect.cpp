@@ -13,6 +13,7 @@
 #include <browedit/components/LubWindRenderer.h>
 #include <browedit/components/StrRenderer.h>
 #include <browedit/components/SprRenderer.h>
+#include <browedit/components/PortalRenderer.h>
 #include <browedit/components/FxRenderer.h>
 #include <browedit/components/EvilsPawRenderer.h>
 #include <browedit/actions/AddComponentAction.h>
@@ -544,8 +545,14 @@ void attachEffectPreview(Node* node)
 		catch (...) { std::cerr << "effectparts.json not loaded" << std::endl; }
 	}
 	auto e = node->getComponent<RswEffect>();
-	if (!e || node->getComponent<StrEffect>() || node->getComponent<SprEffect>() || node->getComponent<FxEffect>() || node->getComponent<LubEffect>() || node->getComponent<LubWindEffect>() || node->getComponent<EvilsPawEffect>())
+	if (!e || node->getComponent<StrEffect>() || node->getComponent<SprEffect>() || node->getComponent<PortalEffect>() || node->getComponent<FxEffect>() || node->getComponent<LubEffect>() || node->getComponent<LubWindEffect>() || node->getComponent<EvilsPawEffect>())
 		return;
+	if (e->id == 45)	// ripple rings and floating lights, drawn from code by the client
+	{
+		node->addComponent(new PortalEffect());
+		node->addComponent(new PortalRenderer());
+		return;
+	}
 	if (e->id == 44)	// EF_SMOKE is drawn by client code, not from a file: approximate it with a soft smoke emitter
 	{
 		auto le = new LubEffect();

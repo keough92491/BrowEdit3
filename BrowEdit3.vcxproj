@@ -64,6 +64,7 @@
     <ClCompile Include="browedit\components\Str.cpp" />
     <ClCompile Include="browedit\components\StrRenderer.cpp" />
     <ClCompile Include="browedit\components\SprRenderer.cpp" />
+    <ClCompile Include="browedit\components\PortalRenderer.cpp" />
     <ClCompile Include="browedit\sprite\RoFormats.cpp" />
     <ClCompile Include="browedit\sprite\Compose.cpp" />
     <ClCompile Include="browedit\sprite\Text.cpp" />
@@ -250,6 +251,7 @@
     <ClInclude Include="browedit\components\Str.h" />
     <ClInclude Include="browedit\components\StrRenderer.h" />
     <ClInclude Include="browedit\components\SprRenderer.h" />
+    <ClInclude Include="browedit\components\PortalRenderer.h" />
     <ClInclude Include="browedit\components\FxRenderer.h" />
     <ClInclude Include="browedit\components\WaterRenderer.h" />
     <ClInclude Include="browedit\Config.h" />

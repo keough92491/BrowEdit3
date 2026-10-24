@@ -156,6 +156,7 @@ namespace sprite
 
 	std::shared_ptr<Frame> Composer::frame_(const CharacterConfig& c, const std::string& cfgKey, int action, int dir, int fr)
 	{
+		if (c.headMode == 4) fr = 0;	// None: no animation at all, the first frame stays
 		std::string key = cfgKey + "|" + std::to_string(action) + "|" + std::to_string(dir) + "|" + std::to_string(fr);
 		auto it = frames.find(key);
 		if (it != frames.end()) return it->second;
@@ -198,7 +199,7 @@ namespace sprite
 		{
 			int dx = 0, dy = 0;
 			// steady head: the head and what sits on it keep one pose while the body goes on
-			int lf = (c.headMode > 0 && (l->what == "head" || l->what == "gear")) ? c.headMode - 1 : fr;
+			int lf = (c.headMode > 0 && (l->what == "head" || l->what == "gear")) ? (c.headMode == 4 ? 0 : c.headMode - 1) : fr;
 			if (l->attach == 1)
 			{
 				int ax, ay; anchorOf(*l, ax, ay, lf);

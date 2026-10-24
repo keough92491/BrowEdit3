@@ -383,9 +383,9 @@ namespace sprite
 				ImGui::SameLine(); if (ImGui::RadioButton("Female", g == Female)) gsel = Female;
 				if (gsel != g) { im.applyJobChange(*this, c, c.job, gsel); g = gsel; }
 				{
-					const char* hm[] = { "Moving head (animated)", "Steady head - straight", "Steady head - pose 2", "Steady head - pose 3" };
+					const char* hm[] = { "Moving head (animated)", "Steady head - straight", "Steady head - pose 2", "Steady head - pose 3", "None (no animation)" };
 					ImGui::SetNextItemWidth(220);
-					ImGui::Combo("Head movement", &c.headMode, hm, 4);
+					ImGui::Combo("Head movement", &c.headMode, hm, 5);
 				}
 
 				// hairstyle / colour
