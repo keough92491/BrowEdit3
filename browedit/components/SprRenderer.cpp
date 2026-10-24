@@ -241,7 +241,13 @@ void SprRenderer::render(NodeRenderContext& context)
 	shader->setUniform(SprShader::Uniforms::modelMatrix, modelMatrix);
 
 	float ps = sprEffect->pixelSize;
-	glm::vec2 os(glm::abs(rswObject->scale.x), glm::abs(rswObject->scale.y));	// the object's Scale in the properties window
+	glm::vec2 os(glm::abs(rswObject->scale.x), glm::abs(rswObject->scale.y));
+	// Param 1 / Param 2 of the effect set width / height (35 = the default size), so they can be tuned live
+	if (auto re = node->getComponent<RswEffect>())
+	{
+		if (re->param1 > 0) os.x *= re->param1 / 35.0f;
+		if (re->param2 > 0) os.y *= re->param2 / 35.0f;
+	}	// the object's Scale in the properties window
 	for (auto& l : motion.layers)
 	{
 		auto tex = sprAct->texture(l);
