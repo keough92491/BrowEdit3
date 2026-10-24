@@ -253,9 +253,10 @@ void SprRenderer::render(NodeRenderContext& context)
 		float ca = cosf(glm::radians(-l.rotation)), sa = sinf(glm::radians(-l.rotation));
 		float u0 = l.mirror ? 1.0f : 0.0f, u1 = l.mirror ? 0.0f : 1.0f;
 		const float cs[4][4] = { {-hw, -hh, u0, 1}, {-hw, hh, u0, 0}, {hw, hh, u1, 0}, {hw, -hh, u1, 1} };
-		VertexP3T2 verts[4];
+		std::vector<VertexP3T2> verts;
+		verts.reserve(4);
 		for (int i = 0; i < 4; i++)
-			verts[i] = VertexP3T2(glm::vec3(cx + cs[i][0] * ca - cs[i][1] * sa, cy + cs[i][0] * sa + cs[i][1] * ca, 0), glm::vec2(cs[i][2], cs[i][3]));
+			verts.push_back(VertexP3T2(glm::vec3(cx + cs[i][0] * ca - cs[i][1] * sa, cy + cs[i][0] * sa + cs[i][1] * ca, 0), glm::vec2(cs[i][2], cs[i][3])));
 		shader->setUniform(SprShader::Uniforms::color, l.color);
 		tex->bind();
 		glVertexAttribPointer(0, 3, GL_FLOAT, false, sizeof(VertexP3T2), verts[0].data);
