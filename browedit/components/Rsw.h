@@ -467,3 +467,6 @@ public:
 	bool isColliding(const math::Ray& ray, std::vector<glm::vec3>& ret);
 	void getCollisionsSub(Rsm::Mesh* mesh, const math::Ray& ray, const glm::mat4& matrix, std::vector<glm::vec3>& ret);
 };
+
+// Shows the real client animation (.str) of a normal effect id on its node, when the effect table knows one.
+void attachEffectPreview(Node* node);

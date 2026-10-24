@@ -299,6 +299,9 @@ void Rsw::load(const std::string& fileName, Map* map, BrowEdit* browEdit, bool l
 				if (lubTables.evilsPaws.find(effectIndex[rswEffect->id]) != lubTables.evilsPaws.end())
 					object->getComponent<EvilsPawEffect>()->load(lubTables.evilsPaws[effectIndex[rswEffect->id]]);
 				break;
+			default:
+				attachEffectPreview(object);
+				break;
 			}
 
 			effectIndex[rswEffect->id]++;

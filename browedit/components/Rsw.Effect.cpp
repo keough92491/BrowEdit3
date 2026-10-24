@@ -524,3 +524,41 @@ void EvilsPawEffect::buildImGuiMulti(BrowEdit* browEdit, const std::vector<Node*
 		util::DragFloatMulti<EvilsPawEffect>(browEdit, browEdit->activeMapView->map, lubEffects, "speed", [](EvilsPawEffect* e) {return &e->speed; }, 0.1f, 0, 0);
 	}
 }
+
+// ---- effect preview: render the real .str animation for normal client effect ids ----
+void attachEffectPreview(Node* node)
+{
+	static std::map<int, std::string> table;
+	static bool loaded = false;
+	if (!loaded)
+	{
+		loaded = true;
+		try {
+			auto j = util::FileIO::getJson("data\\effectstr.json");
+			for (auto it = j.begin(); it != j.end(); ++it)
+				if (it.value().is_array() && it.value().size() > 0)
+					table[std::stoi(it.key())] = it.value()[0].get<std::string>();
+		}
+		catch (...) { std::cerr << "effectstr.json not loaded" << std::endl; }
+	}
+	auto e = node->getComponent<RswEffect>();
+	if (!e || node->getComponent<StrEffect>() || node->getComponent<LubEffect>() || node->getComponent<LubWindEffect>() || node->getComponent<EvilsPawEffect>())
+		return;
+	auto it = table.find(e->id);
+	if (it == table.end())
+		return;
+	std::string f = it->second;
+	for (size_t p; (p = f.find("%d")) != std::string::npos;)
+		f.replace(p, 2, "1");
+	for (auto& c : f) if (c == '/') c = '\\';
+	std::string candidates[2] = { f, f.rfind("effect\\", 0) == 0 ? f.substr(7) : f };
+	for (auto& cand : candidates)
+		if (util::FileIO::exists("data\\texture\\effect\\" + cand + ".str"))
+		{
+			auto se = new StrEffect();
+			se->str = util::iso_8859_1_to_utf8(cand + ".str");
+			node->addComponent(se);
+			node->addComponent(new StrRenderer());
+			return;
+		}
+}
