@@ -356,6 +356,7 @@ public:
 	int liveLightmapQuality = 1;		// max lightmapper quality used for live bakes
 	struct { Map* map = nullptr; size_t lastStamp = 0; double lastChange = 0; double lastCheck = 0; double lastBakeTime = 0; bool pending = false; bool wasOn = false; bool baking = false; } liveLightmapState;
 	void liveLightmapUpdate();
+	void liveLightmapFlush(Map* map);	// bake right now if an edit is still waiting (called before saving)
 	bool liveBake(Map* map);
 	void showObjectProperties();
 	void showUndoWindow();

@@ -682,6 +682,7 @@ void fixBackup(const std::string& fileName, const std::string& backupfileName)
 
 void BrowEdit::saveMap(Map* map)
 {
+	liveLightmapFlush(map);
 	if(config.recalculateQuadtreeOnSave)
 		map->recalculateQuadTree(this);
 

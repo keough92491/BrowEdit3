@@ -148,3 +148,20 @@ void BrowEdit::liveLightmapUpdate()
 	s.baking = false;
 	s.lastBakeTime = ImGui::GetTime() - now;
 }
+
+void BrowEdit::liveLightmapFlush(Map* map)
+{
+	auto& s = liveLightmapState;
+	if (!liveLightmap || !map || lightmapper)
+		return;
+	// compare against the last stamp that was actually baked, so a save right after an edit still gets fresh lightmaps
+	size_t st = mapStamp(map);
+	if (s.map == map && !s.pending && st == s.lastStamp)
+		return;
+	if (liveBake(map))
+	{
+		s.map = map; s.lastStamp = st; s.pending = false;
+	}
+	else
+		liveLightmap = false;
+}
