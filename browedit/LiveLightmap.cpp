@@ -13,6 +13,7 @@
 #include <imgui.h>
 #include <iostream>
 #include <set>
+#include <chrono>
 
 namespace
 {
@@ -36,7 +37,8 @@ namespace
 			{
 				auto c = gnd->cubes[x][y];
 				mix(h, c->heights, sizeof(c->heights));
-				mix(h, c->tileIds, sizeof(c->tileIds));
+				char has[3] = { c->tileIds[0] != -1, c->tileIds[1] != -1, c->tileIds[2] != -1 };	// only whether a surface exists: tile renumbering by the baker must not count as an edit
+				mix(h, has, 3);
 			}
 		mix(h, &rsw->light.longitude, sizeof(int)); mix(h, &rsw->light.latitude, sizeof(int));
 		mix(h, &rsw->light.diffuse, sizeof(glm::vec3)); mix(h, &rsw->light.ambient, sizeof(glm::vec3));
@@ -146,14 +148,21 @@ void BrowEdit::liveLightmapUpdate()
 	}
 	if (!s.pending || now - s.lastChange < liveLightmapDelay)
 		return;
+	// adaptive throttle: never spend more than ~1/3 of the time baking, whatever the map size
+	if (now - s.lastBakeEnd < glm::max((double)liveLightmapDelay, 2.0 * s.lastBakeTime))
+		return;
 	if (ImGui::IsMouseDown(ImGuiMouseButton_Left) && now - s.lastChange < 100)
 		return; // wait for the end of a drag
 	s.pending = false;
 	s.baking = true;
+	auto t0 = std::chrono::steady_clock::now();
 	if (!liveBake(map))
 		liveLightmap = false;
 	s.baking = false;
-	s.lastBakeTime = ImGui::GetTime() - now;
+	s.lastBakeTime = std::chrono::duration<double>(std::chrono::steady_clock::now() - t0).count();
+	s.lastBakeEnd = ImGui::GetTime();
+	s.lastStamp = mapStamp(map);	// the bake itself may renumber tiles; never treat that as a new edit (would loop forever)
+	std::cout << "Live lightmap: baked in " << s.lastBakeTime << "s" << std::endl;
 }
 
 void BrowEdit::liveLightmapFlush(Map* map)
@@ -167,7 +176,7 @@ void BrowEdit::liveLightmapFlush(Map* map)
 		return;
 	if (liveBake(map))
 	{
-		s.map = map; s.lastStamp = st; s.pending = false;
+		s.map = map; s.lastStamp = mapStamp(map); s.pending = false;
 	}
 	else
 		liveLightmap = false;
