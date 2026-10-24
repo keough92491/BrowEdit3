@@ -68,6 +68,7 @@ public:
 	};
 
 	SprRenderer();
+	void setSprEffect(SprEffect* e) { sprEffect = e; }
 	~SprRenderer();
 	virtual void render(NodeRenderContext& context) override;
 

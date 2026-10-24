@@ -13,6 +13,7 @@
 #include <browedit/components/LubWindRenderer.h>
 #include <browedit/components/StrRenderer.h>
 #include <browedit/components/SprRenderer.h>
+#include <browedit/components/FxRenderer.h>
 #include <browedit/components/EvilsPawRenderer.h>
 #include <browedit/actions/AddComponentAction.h>
 #include <browedit/actions/RemoveComponentAction.h>
@@ -526,36 +527,24 @@ void EvilsPawEffect::buildImGuiMulti(BrowEdit* browEdit, const std::vector<Node*
 	}
 }
 
-// ---- effect preview: render the real .str animation for normal client effect ids ----
+// ---- effect preview: render the parts of normal client effect ids (data/effectparts.json, generated from EffectTable.json) ----
 void attachEffectPreview(Node* node)
 {
-	static std::map<int, std::string> table;
+	static std::map<int, nlohmann::json> table;
 	static bool loaded = false;
 	if (!loaded)
 	{
 		loaded = true;
 		try {
-			auto j = util::FileIO::getJson("data\\effectstr.json");
+			auto j = util::FileIO::getJson("data\\effectparts.json");
 			for (auto it = j.begin(); it != j.end(); ++it)
-				if (it.value().is_array() && it.value().size() > 0)
-					table[std::stoi(it.key())] = it.value()[0].get<std::string>();
+				if (it.value().is_array())
+					table[std::stoi(it.key())] = it.value();
 		}
-		catch (...) { std::cerr << "effectstr.json not loaded" << std::endl; }
-	}
-	static std::map<int, std::string> sprTable;
-	static bool sprLoaded = false;
-	if (!sprLoaded)
-	{
-		sprLoaded = true;
-		try {
-			auto j = util::FileIO::getJson("data\\effectspr.json");
-			for (auto it = j.begin(); it != j.end(); ++it)
-				sprTable[std::stoi(it.key())] = util::utf8_to_iso_8859_1(it.value().get<std::string>());
-		}
-		catch (...) { std::cerr << "effectspr.json not loaded" << std::endl; }
+		catch (...) { std::cerr << "effectparts.json not loaded" << std::endl; }
 	}
 	auto e = node->getComponent<RswEffect>();
-	if (!e || node->getComponent<StrEffect>() || node->getComponent<SprEffect>() || node->getComponent<LubEffect>() || node->getComponent<LubWindEffect>() || node->getComponent<EvilsPawEffect>())
+	if (!e || node->getComponent<StrEffect>() || node->getComponent<SprEffect>() || node->getComponent<FxEffect>() || node->getComponent<LubEffect>() || node->getComponent<LubWindEffect>() || node->getComponent<EvilsPawEffect>())
 		return;
 	if (e->id == 44)	// EF_SMOKE is drawn by client code, not from a file: approximate it with a soft smoke emitter
 	{
@@ -579,33 +568,62 @@ void attachEffectPreview(Node* node)
 	}
 	auto it = table.find(e->id);
 	if (it == table.end())
+		return;
+	for (auto& part : it->second)
 	{
-		auto sp = sprTable.find(e->id);
-		if (sp != sprTable.end())
+		std::string type = part.value("type", "");
+		auto str = [&](const char* k) { return part.contains(k) && part[k].is_string() ? part[k].get<std::string>() : std::string(); };
+		std::string file = str("file");
+		if (type == "STR")
 		{
-			std::string base = "data\\sprite\\\xC0\xCC\xC6\xD1\xC6\xAE\\" + sp->second;
+			std::string f = file;
+			int r = 1;
+			if (part.contains("rand") && part["rand"].is_array() && part["rand"].size() > 0 && part["rand"][0].is_number())
+				r = part["rand"][0].get<int>();
+			for (size_t p; (p = f.find("%d")) != std::string::npos;)
+				f.replace(p, 2, std::to_string(r));
+			for (auto& c : f) if (c == '/') c = '\\';
+			std::string candidates[2] = { f, f.rfind("effect\\", 0) == 0 ? f.substr(7) : f };
+			for (auto& cand : candidates)
+				if (util::FileIO::exists("data\\texture\\effect\\" + cand + ".str"))
+				{
+					auto se = new StrEffect();
+					se->str = util::iso_8859_1_to_utf8(cand + ".str");
+					auto sr = new StrRenderer();
+					sr->setStrEffect(se);
+					node->addComponent(se);
+					node->addComponent(sr);
+					break;
+				}
+		}
+		else if (type == "SPR" || (type == "3D" && file.empty() && !str("spriteName").empty()))
+		{
+			std::string name = util::utf8_to_iso_8859_1(type == "SPR" ? file : str("spriteName"));
+			std::string base = "data\\sprite\\\xC0\xCC\xC6\xD1\xC6\xAE\\" + name;
 			if (util::FileIO::exists(base + ".spr") && util::FileIO::exists(base + ".act"))
 			{
 				auto se = new SprEffect();
-				se->file = sp->second;
+				se->file = name;
+				auto sr = new SprRenderer();
+				sr->setSprEffect(se);
 				node->addComponent(se);
-				node->addComponent(new SprRenderer());
+				node->addComponent(sr);
 			}
 		}
-		return;
-	}
-	std::string f = it->second;
-	for (size_t p; (p = f.find("%d")) != std::string::npos;)
-		f.replace(p, 2, "1");
-	for (auto& c : f) if (c == '/') c = '\\';
-	std::string candidates[2] = { f, f.rfind("effect\\", 0) == 0 ? f.substr(7) : f };
-	for (auto& cand : candidates)
-		if (util::FileIO::exists("data\\texture\\effect\\" + cand + ".str"))
+		else if (type == "2D" || type == "3D" || type == "CYLINDER")
 		{
-			auto se = new StrEffect();
-			se->str = util::iso_8859_1_to_utf8(cand + ".str");
-			node->addComponent(se);
-			node->addComponent(new StrRenderer());
-			return;
+			auto fe = new FxEffect();
+			fe->type = type;
+			fe->texture = type == "CYLINDER" ? str("textureName") : file;
+			for (auto kv = part.begin(); kv != part.end(); ++kv)
+			{
+				if (kv.value().is_number()) fe->n[kv.key()] = kv.value().get<float>();
+				else if (kv.value().is_boolean()) fe->n[kv.key()] = kv.value().get<bool>() ? 1.0f : 0.0f;
+			}
+			auto fr = new FxRenderer();
+			fr->setEffect(fe);
+			node->addComponent(fe);
+			node->addComponent(fr);
 		}
+	}
 }
