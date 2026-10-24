@@ -69,15 +69,25 @@ namespace
 		return h;
 	}
 
+	// Only tiles that cubes actually use matter (orphan tiles left behind by tile edits are ignored).
 	bool lightmapsAreUnique(Gnd* gnd)
 	{
 		std::set<int> taken;
-		for (auto t : gnd->tiles)
-			if (t->lightmapIndex == -1 || !taken.insert(t->lightmapIndex).second)
-				return false;
+		for (int x = 0; x < gnd->width; x++)
+			for (int y = 0; y < gnd->height; y++)
+				for (int i = 0; i < 3; i++)
+				{
+					int id = gnd->cubes[x][y]->tileIds[i];
+					if (id < 0)
+						continue;
+					int lm = gnd->tiles[id]->lightmapIndex;
+					if (lm == -1 || !taken.insert(lm).second)
+						return false;
+				}
 		return true;
 	}
 }
+
 
 bool BrowEdit::liveBake(Map* map)
 {
