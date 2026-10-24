@@ -1,6 +1,6 @@
 """Beach strip along the shore inside the user's red lines (screenshot beach_red_shot.png, calibrated -> beach_loop.npy,
 8 px/cube, window x 120..200, y 40..125).  Bakes grass -> dirt -> pale sand cells; never touches cliff cubes, the dungeon, road or plaza.
-Writes beach_t.json (provisional slots 300+k) and prt_novbf%02d.bmp."""
+Writes beach_t.json (provisional slots 300+k) and prt_novbg%02d.bmp."""
 import json, os, numpy as np
 from PIL import Image
 from scipy import ndimage as ndi
@@ -38,9 +38,10 @@ def tile_at(img, wx, wy):
     u = (wx % 4) / 4 * img.shape[1]; v = (1 - (wy % 4) / 4) * img.shape[0]
     return np.stack([ndi.map_coordinates(img[..., k], [v - 0.5, u - 0.5], order=1, mode="grid-wrap") for k in range(3)], -1)
 S_ = lambda t: (lambda u: u * u * (3 - 2 * u))(np.clip(t, 0, 1))
-CELL, ATLW, ATLH, SS = 56, 1008, 952, 2
-PERA, PERY = ATLW // CELL, ATLH // CELL; NC = PERA * PERY
-px = (np.arange(CELL * SS) + 0.5) / (CELL * SS); FX, FY = np.meshgrid(px, 1 - px)
+CELL, GUT, ATLW, ATLH, SS = 56, 4, 1024, 960, 2
+CELLP = CELL + 2 * GUT
+PERA, PERY = ATLW // CELLP, ATLH // CELLP; NC = PERA * PERY
+px = ((np.arange(-GUT, CELL + GUT)[:, None] + (np.arange(SS) + 0.5) / SS - 0.5) / (CELL - 1)).ravel(); FX, FY = np.meshgrid(px, 1 - px)   # edge pixel centres on the cube edges
 cand = []
 for x in range(LX0, 200):
     for y in range(LY0 + 1, LY1 - 1):
@@ -65,13 +66,12 @@ natl = (len(cand) + NC - 1) // NC
 atl = [np.zeros((ATLH, ATLW, 3), np.uint8) for _ in range(natl)]
 tiles = []; cells = {}
 for n_, (x, y) in enumerate(cand):
-    col = colour(x + FX, y + FY).reshape(CELL, SS, CELL, SS, 3).mean((1, 3))
-    c8 = np.clip(col, 0, 255).astype(np.uint8); cells[(x, y)] = c8
+    col = colour(x + FX, y + FY).reshape(CELLP, SS, CELLP, SS, 3).mean((1, 3))
+    c8 = np.clip(col, 0, 255).astype(np.uint8); cells[(x, y)] = c8[GUT:-GUT, GUT:-GUT]
     k, c = divmod(n_, NC); cy_, cx_ = divmod(c, PERA)
-    atl[k][cy_ * CELL:(cy_ + 1) * CELL, cx_ * CELL:(cx_ + 1) * CELL] = c8
-    eu, ev = 0.5 / ATLW, 0.5 / ATLH
-    u0, u1 = (cx_ * CELL) / ATLW + eu, ((cx_ + 1) * CELL) / ATLW - eu
-    v0, v1 = (cy_ * CELL) / ATLH + ev, ((cy_ + 1) * CELL) / ATLH - ev
+    atl[k][cy_ * CELLP:(cy_ + 1) * CELLP, cx_ * CELLP:(cx_ + 1) * CELLP] = c8
+    u0, u1 = (cx_ * CELLP + GUT + 0.5) / ATLW, (cx_ * CELLP + GUT + CELL - 0.5) / ATLW
+    v0, v1 = (cy_ * CELLP + GUT + 0.5) / ATLH, (cy_ * CELLP + GUT + CELL - 0.5) / ATLH
     tiles.append([x, y, 300 + k, round(u0, 5), round(v1, 5), round(u1, 5), round(v1, 5), round(u0, 5), round(v0, 5), round(u1, 5), round(v0, 5)])
 json.dump({"commands": [{"cmd": "tiles", "list": tiles}]}, open(OUT + "beach_t.json", "w"), separators=(",", ":"))
 for k in range(natl):

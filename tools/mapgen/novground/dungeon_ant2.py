@@ -1,5 +1,5 @@
 """Lower-right ant-nest dungeon, UL-style: smooth cave slopes, black rock ceiling, baked atlases (antflat floor + moss/mine rock).
-Layout traced from the user's 'Ant Nest' guide.  Writes an_h/an_g/an_t json + prt_novaq%02d.bmp, preview an_pv.png."""
+Layout traced from the user's 'Ant Nest' guide.  Writes an_h/an_g/an_t json + prt_novar%02d.bmp, preview an_pv.png."""
 import json, os, numpy as np, cv2
 from PIL import Image, ImageDraw
 from scipy import ndimage as ndi
@@ -156,9 +156,10 @@ zoneE = ndi.gaussian_filter((np.array(_zi)[::-1].T > 127).astype(float), 0.35 * 
 nzc = nz(0.8); nz1 = nz(0.5); nz2 = nz(0.25); nz3a = nz(2.2); nzf = nz(1.6)
 smooth = S_
 glows = []
-CELL, ATLW, ATLH, SS = 56, 1008, 952, 2
-PERA, PERY = ATLW // CELL, ATLH // CELL; NC = PERA * PERY
-cs_ = (np.arange(CELL * SS) + 0.5) / (CELL * SS)
+CELL, GUT, ATLW, ATLH, SS = 56, 4, 1024, 960, 2      # GUT: gutter pixels baked around every cell (world-continuous) so mip levels never bleed into the neighbouring atlas cell
+CELLP = CELL + 2 * GUT
+PERA, PERY = ATLW // CELLP, ATLH // CELLP; NC = PERA * PERY
+cs_ = ((np.arange(-GUT, CELL + GUT)[:, None] + (np.arange(SS) + 0.5) / SS - 0.5) / (CELL - 1)).ravel()   # edge pixel centres sit exactly on the cube edges -> neighbouring cells share identical border colours (no seams without mipmaps)
 FXc, FYc = np.meshgrid(cs_, 1 - cs_)
 baked, plain = [], []
 for x in range(NXc):
@@ -267,15 +268,14 @@ for n_, (x, y) in enumerate(baked):
         wdr = smooth(0.5 + (sdn + 0.04) / 0.55)[..., None]
         if (x, y) in road_blend: wdr = wdr * smooth((wy - 71.8) / 2.8)[..., None]
         col = col * (1 - wdr) + tile_at(T_DIRT, wx, wy) * wdr
-    col = col.reshape(CELL, SS, CELL, SS, 3).mean((1, 3))
-    c8 = np.clip(col, 0, 255).astype(np.uint8); cells["%d_%d" % (x, y)] = c8
+    col = col.reshape(CELLP, SS, CELLP, SS, 3).mean((1, 3))
+    c8 = np.clip(col, 0, 255).astype(np.uint8); cells["%d_%d" % (x, y)] = c8[GUT:-GUT, GUT:-GUT]
     k, c = divmod(n_, NC); cy_, cx_ = divmod(c, PERA)
-    atl[k][cy_ * CELL:(cy_ + 1) * CELL, cx_ * CELL:(cx_ + 1) * CELL] = c8
-    eu, ev = 0.5 / ATLW, 0.5 / ATLH
-    u0, u1 = (cx_ * CELL) / ATLW + eu, ((cx_ + 1) * CELL) / ATLW - eu
-    v0, v1 = (cy_ * CELL) / ATLH + ev, ((cy_ + 1) * CELL) / ATLH - ev
+    atl[k][cy_ * CELLP:(cy_ + 1) * CELLP, cx_ * CELLP:(cx_ + 1) * CELLP] = c8
+    u0, u1 = (cx_ * CELLP + GUT + 0.5) / ATLW, (cx_ * CELLP + GUT + CELL - 0.5) / ATLW
+    v0, v1 = (cy_ * CELLP + GUT + 0.5) / ATLH, (cy_ * CELLP + GUT + CELL - 0.5) / ATLH
     tiles.append([x, y, SLOT_ATL0 + k, round(u0, 5), round(v1, 5), round(u1, 5), round(v1, 5), round(u0, 5), round(v0, 5), round(u1, 5), round(v0, 5)])
-for x, y in plain: tiles.append([x, y, SLOT_TOP, 0.06, 0.06, 0.14, 0.06, 0.06, 0.14, 0.14, 0.14])
+for x, y in plain: tiles.append([x, y, SLOT_TOP, 0.09, 0.09, 0.11, 0.09, 0.09, 0.11, 0.11, 0.11])
 def _pl(x, y):
     pts = [(((x % 4) + dx) / 4, 1 - ((y % 4) + dy) / 4) for dx, dy in [(0, 0), (1, 0), (0, 1), (1, 1)]]
     return [round(float(q), 5) for p in pts for q in p]

@@ -160,7 +160,7 @@ OUTER = ndi.gaussian_filter((_dcm <= R_OUT).astype(float), 1.0) > 0.5      # sli
 INNER = ndi.gaussian_filter((_dcm <= R_IN).astype(float), 1.0) > 0.5
 # ---------- smooth plaza: custom-painted rim tiles (atlas PNGs) ----------
 R1, R2 = 12.2, 15.0               # nominal radii (cube units): rosette | brick ring | grass
-CELL, ATL = 64, 960              # 64 px per cube, 16x16 cells per 1024 px atlas
+CELL, GUT, ATL = 64, 4, 936              # 64 px per cube, 16x16 cells per 1024 px atlas
 from scipy.ndimage import map_coordinates as _mc
 BX0, BY0 = CAMP[0] - 24.0, CAMP[1] - 24.0
 def vnoise(cell, seed):             # smooth world-continuous noise, unit-ish variance, wavelength ~ cell (cubes)
@@ -193,10 +193,11 @@ for x in range(W):
         elif dmin >= R2 + ZO: pass
         elif dmin >= R1 + ZI and dmax <= R2 - ZO: REG[(x, y)] = 7
         else: RIM.append((x, y))
-NCELL = (ATL // CELL) ** 2
+CELLP = CELL + 2 * GUT      # gutter baked around each cell so mip levels don't bleed between atlas cells
+NCELL = (ATL // CELLP) ** 2
 natl = (len(RIM) + NCELL - 1) // NCELL
 atlas = [np.zeros((ATL, ATL, 3), np.uint8) for _ in range(max(natl, 4))]
-px = (np.arange(CELL) + 0.5) / CELL; FX, FY = np.meshgrid(px, 1 - px)     # FY: image row 0 = north
+px = np.arange(-GUT, CELL + GUT) / (CELL - 1.0); FX, FY = np.meshgrid(px, 1 - px)     # FY: image row 0 = north
 RIMUV = {}
 SM = lambda t: np.clip(t, 0, 1) ** 2 * (3 - 2 * np.clip(t, 0, 1))
 for n_, (x, y) in enumerate(RIM):
@@ -224,15 +225,14 @@ for n_, (x, y) in enumerate(RIM):
     dust = SM((r - (ro - 0.9)) / 0.9) * 0.15 * (0.6 + 0.4 * NM(wx, wy + 40))
     stone = stone * (1 - dust[..., None]) + dt * dust[..., None]
     img = stone * a2[..., None] + ground * (1 - a2[..., None])
-    k, c = divmod(n_, NCELL); cy_, cx_ = divmod(c, ATL // CELL)
-    atlas[k][cy_ * CELL:(cy_ + 1) * CELL, cx_ * CELL:(cx_ + 1) * CELL] = np.clip(img, 0, 255).astype(np.uint8)
-    e = 0.5 / ATL
-    u0, u1 = (cx_ * CELL) / ATL + e, ((cx_ + 1) * CELL) / ATL - e
-    v0, v1 = (cy_ * CELL) / ATL + e, ((cy_ + 1) * CELL) / ATL - e          # v0 = north edge of the cell
+    k, c = divmod(n_, NCELL); cy_, cx_ = divmod(c, ATL // CELLP)
+    atlas[k][cy_ * CELLP:(cy_ + 1) * CELLP, cx_ * CELLP:(cx_ + 1) * CELLP] = np.clip(img, 0, 255).astype(np.uint8)
+    u0, u1 = (cx_ * CELLP + GUT + 0.5) / ATL, (cx_ * CELLP + GUT + CELL - 0.5) / ATL
+    v0, v1 = (cy_ * CELLP + GUT + 0.5) / ATL, (cy_ * CELLP + GUT + CELL - 0.5) / ATL          # v0 = north edge of the cell
     RIMUV[(x, y)] = (11 + k, [(u0, v1), (u1, v1), (u0, v0), (u1, v0)])      # SW SE NW NE
 for k, im in enumerate(atlas):
-    Image.fromarray(im).save("/mnt/user-data/outputs/prt_novplc%02d.png" % (k + 1))
-    Image.fromarray(im).quantize(colors=256, method=Image.Quantize.MEDIANCUT, dither=Image.Dither.FLOYDSTEINBERG).save("/mnt/user-data/outputs/prt_novplc%02d.bmp" % (k + 1))
+    Image.fromarray(im).save("/mnt/user-data/outputs/prt_novpld%02d.png" % (k + 1))
+    Image.fromarray(im).quantize(colors=256, method=Image.Quantize.MEDIANCUT, dither=Image.Dither.FLOYDSTEINBERG).save("/mnt/user-data/outputs/prt_novpld%02d.bmp" % (k + 1))
 print("rim cubes", len(RIM), "atlases", len(atlas))
 tiles, used = [], {}
 cube_uv = {}
