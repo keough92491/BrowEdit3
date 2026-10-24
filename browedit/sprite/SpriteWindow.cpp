@@ -32,7 +32,7 @@ namespace sprite
 		bool inputStr(const char* label, std::string& s, int max = 96)
 		{
 			std::vector<char> buf(max, 0);
-			strncpy(buf.data(), s.c_str(), max - 1);
+			memcpy(buf.data(), s.c_str(), std::min((size_t)max - 1, s.size()));
 			if (ImGui::InputText(label, buf.data(), max)) { s = buf.data(); return true; }
 			return false;
 		}

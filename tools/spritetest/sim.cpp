@@ -53,7 +53,7 @@ int main(int argc, char** argv)
 	for (auto& w : comp.warnings(c)) printf("warning: %s\n", w.c_str());
 	// 8 directions side by side
 	const int cw = 160, ch = 200;
-	std::vector<uint8_t> sheet((size_t)cw * 8 * ch * 4, 40);
+	std::vector<uint8_t> sheet((size_t)cw * 8 * ch * 4, 90); for (size_t i = 3; i < sheet.size(); i += 4) sheet[i] = 255;
 	for (int d = 0; d < 8; d++)
 	{
 		auto inf = comp.info(c, action, d);
