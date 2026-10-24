@@ -227,6 +227,7 @@ void BrowEdit::run()
 		menuBar();
 		toolbar();
 		try { claudeLink(); } catch (...) { claudeLinkEnabled = false; }
+		try { liveLightmapUpdate(); } catch (...) { liveLightmap = false; }
 
 		if (windowData.configVisible)
 			windowData.configVisible = !config.showWindow(this);

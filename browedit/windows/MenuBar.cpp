@@ -477,6 +477,7 @@ void BrowEdit::menuBar()
 		}
 		hotkeyMenuItem("Calculate Quadtree", HotkeyAction::Global_CalculateQuadtree);
 		hotkeyMenuItem("Calculate lightmaps", HotkeyAction::Global_CalculateLightmaps);
+		ImGui::MenuItem("Live lightmap (re-bake on edits)", nullptr, &liveLightmap);
 		if (ImGui::MenuItem("Make tiles unique"))
 			activeMapView->map->rootNode->getComponent<Gnd>()->makeTilesUnique();
 		hotkeyMenuItem("Remove zero height walls", HotkeyAction::Global_ClearZeroHeightWalls);

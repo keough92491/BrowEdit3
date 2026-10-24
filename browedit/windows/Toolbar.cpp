@@ -187,7 +187,7 @@ void BrowEdit::toolbar()
 			int objectCount = 0;
 			activeMapView->map->rootNode->traverse([&objectCount](Node* n) { if (n->getComponent<RswObject>()) objectCount++; });
 
-			stats = std::format("Map: {}, Tiles({}), Lightmaps({}), Objects({})", activeMapView->map->name.c_str(), activeMapView->map->rootNode->getComponent<Gnd>()->tiles.size(), activeMapView->map->rootNode->getComponent<Gnd>()->lightmaps.size(), objectCount);
+			stats = std::format("Map: {}, Tiles({}), Lightmaps({}), Objects({}){}", activeMapView->map->name.c_str(), activeMapView->map->rootNode->getComponent<Gnd>()->tiles.size(), activeMapView->map->rootNode->getComponent<Gnd>()->lightmaps.size(), objectCount, liveLightmap ? (liveLightmapState.pending ? ", Live lightmap: waiting" : ", Live lightmap: up to date") : "");
 			auto len2 = ImGui::CalcTextSize(stats.c_str());
 
 			ImGui::SameLine(ImGui::GetWindowWidth() - len2.x - len.x - 2 * ImGui::GetStyle().FramePadding.x - 14);
