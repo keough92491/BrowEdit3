@@ -304,17 +304,19 @@ namespace cliff
 					glm::vec2 cp = cornerPos(gnd, t.x, t.y, i);
 					Hit h = eval(cp, hc.ci);
 					u[i] = pl.k * (pl.s[bi] + glm::dot(cp - centre, tg)) * (st.ribbonFlip ? -1.0f : 1.0f);
-					v[i] = vmid - span * h.d / w;
+					// across the slope the band maps linearly; below the foot the texture's lower fringe is spread over a little ground so the rock blends into the grass there
+					if (h.d >= -w * 0.5f) v[i] = vmid - span * h.d / w;
+					else v[i] = st.ribbonBottom + (1.0f - st.ribbonBottom) * std::min(1.0f, (-w * 0.5f - h.d) / std::max(0.2f, st.ribbonFoot));
 					vmn = std::min(vmn, v[i]); vmx = std::max(vmx, v[i]);
 				}
-				if (vmx < st.ribbonTop + 0.12f || vmn > st.ribbonBottom + 0.01f) continue;			// no rock in this tile
+				if (vmx < st.ribbonTop + 0.12f || vmn > 0.995f) continue;			// no rock in this tile
 				float umn = std::min(std::min(u[0], u[1]), std::min(u[2], u[3]));
 				// tiles lying mostly beyond the rock band would only smear the edge pixels: leave them as they were
 				{
 					int over = 0, under = 0;
 					for (int i = 0; i < 4; i++) { over += v[i] > 1.12f; under += v[i] < -0.12f; }
 					if (over >= 1 || under >= 1) continue;
-					if (vmn > st.ribbonBottom - 0.04f || vmx < st.ribbonTop + 0.04f) continue;
+					if (vmx < st.ribbonTop + 0.04f) continue;
 				}
 				float shift = std::floor(umn);
 				for (int i = 0; i < 4; i++) { u[i] -= shift; v[i] = std::clamp(v[i], 0.0f, 1.0f); }
@@ -677,6 +679,7 @@ namespace cliff
 				ImGui::SliderFloat("Cubes per repeat", &s.ribbonPeriod, 1.0f, 16.0f);
 				ImGui::SliderFloat("Rock band top (v)", &s.ribbonTop, 0.0f, 0.5f);
 				ImGui::SliderFloat("Rock band bottom (v)", &s.ribbonBottom, 0.5f, 1.0f);
+				ImGui::SliderFloat("Foot blend (tiles)", &s.ribbonFoot, 0.3f, 4.0f);
 				ImGui::Checkbox("Flip direction", &s.ribbonFlip);
 				ImGui::TextWrapped("The rock band texture is laid along the cliff curve: u follows the curve, v goes across the slope, so it bends round corners without seams. Used instead of the random slope textures when set.");
 			}
