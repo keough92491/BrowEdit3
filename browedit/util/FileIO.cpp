@@ -143,7 +143,7 @@ namespace util
 		bool watchOverflow = false;
 		double nowSec() { return std::chrono::duration<double>(std::chrono::steady_clock::now().time_since_epoch()).count(); }
 
-		std::string lowerStr(std::string s) { for (auto& c : s) c = (char)tolower((unsigned char)c); return s; }
+		std::string lowerStr(std::string s) { for (auto& c : s) c = (char)::tolower((unsigned char)c); return s; }
 
 		void pruneNode(FileIO::Node* n, const std::string& kr)
 		{
