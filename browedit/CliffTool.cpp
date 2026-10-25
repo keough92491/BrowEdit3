@@ -421,6 +421,7 @@ namespace cliff
 					}
 				if (any) out.push_back(rc);
 			}
+			advtex::project(map, browEdit).cellPx = st.ribbonDetail;
 			if (auto act = advtex::makeRibbonAction(map, browEdit, st.ribbonTex, st.ribbonGround, out, "Cliff ribbon"))
 				ga->addAction(act);
 		}
@@ -788,6 +789,8 @@ namespace cliff
 					if (ImGui::Button("Use picker texture as ground") && gnd && mv->textureSelected >= 0 && mv->textureSelected < (int)gnd->textures.size())
 						s.ribbonGround = gnd->textures[mv->textureSelected]->file;
 					ImGui::SameLine(); if (ImGui::Button("Clear##ground")) s.ribbonGround.clear();
+					ImGui::RadioButton("Detail 30 px/tile", &s.ribbonDetail, 30); ImGui::SameLine();
+					ImGui::RadioButton("Detail 62 px/tile (sharper)", &s.ribbonDetail, 62);
 					ImGui::SliderFloat("Edge softness", &s.ribbonSoft, 0.01f, 0.3f);
 					ImGui::SliderFloat("Edge ragged", &s.ribbonNoise, 0.0f, 0.2f);
 					ImGui::TextWrapped("The blend is a draft preview. Open the Advanced Texture mode (F12) and press Build, or answer the save prompt, to write the texture files.");

@@ -40,6 +40,7 @@ namespace cliff
 		bool ribbonFlip = false;
 		bool ribbonBake = true;			// bake the blend per pixel through Advanced Texture (draft preview, files on Build/save); off = plain tile UVs
 		std::string ribbonGround;		// optional ground texture the rock blends into (empty = the ground the tiles already have)
+		int ribbonDetail = 62;			// baked pixels per tile (30 or 62): the rock texture is detailed, 30 looks soft
 		float ribbonSoft = 0.07f;		// softness of the rock edge (texture v units)
 		float ribbonNoise = 0.06f;		// how ragged the edge is
 		float ribbonFoot = 1.5f;		// ground (tiles) below the cliff foot over which the lower fringe of the texture is spread
