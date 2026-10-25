@@ -30,6 +30,12 @@ namespace cliff
 		bool texSlope = true;
 		std::vector<std::string> wallTextures;
 		std::vector<std::string> slopeTextures;
+		// ribbon texturing (sloped cliffs): one rock-band texture with continuous UVs along the cliff curve (u along, v across), no seams between tiles
+		bool ribbon = true;
+		std::string ribbonTex;
+		float ribbonPeriod = 5.0f;		// cubes per texture repeat along the cliff
+		float ribbonTop = 0.08f, ribbonBottom = 0.92f;		// where the rock band sits in the texture (v)
+		bool ribbonFlip = false;
 		// smart edge texturing (sheer cliffs): ground pieces that blend rock into grass along the cliff
 		bool smartEdges = true;
 		std::string pieceTex[3];		// 0 straight edge, 1 rounded corner, 2 diagonal

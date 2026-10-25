@@ -51,6 +51,7 @@ namespace cliff
 		std::vector<glm::ivec2> touched;
 		glm::vec2 lastCentre(-1000.0f);
 		int strokeSeed = 1;
+		std::vector<glm::vec2> centres;
 
 		// corner i of cube (x,y) in tile units (x to the right, z the same axis as the world z / 10)
 		glm::vec2 cornerPos(Gnd* gnd, int x, int y, int i)
@@ -141,6 +142,169 @@ namespace cliff
 			for (int i = 0; i < (int)gnd->textures.size(); i++)
 				if (gnd->textures[i]->file == file) return i;
 			return -1;
+		}
+
+
+		struct Poly { std::vector<glm::vec2> p; std::vector<float> s; bool closed = false; float L = 0, k = 0, period = 0; };
+
+		float fieldAt(const Settings& st, const glm::vec2& p)
+		{
+			float m = -1e9f;
+			for (auto& c : centres) m = std::max(m, st.radius - noisyDistance(st, p, c));
+			return m;
+		}
+
+		// contours of the brush field (marching squares), smoothed and resampled
+		std::vector<Poly> contours(const Settings& st, float tx0, float tz0, float tx1, float tz1)
+		{
+			const int R = 3;
+			int nx = (int)std::ceil((tx1 - tx0) * R) + 1, nz = (int)std::ceil((tz1 - tz0) * R) + 1;
+			std::vector<float> F((size_t)nx * nz);
+			auto at = [&](int i, int j) -> float& { return F[(size_t)i * nz + j]; };
+			for (int i = 0; i < nx; i++) for (int j = 0; j < nz; j++) at(i, j) = fieldAt(st, glm::vec2(tx0 + (float)i / R, tz0 + (float)j / R));
+			auto key = [&](int i, int j, int dir) -> long long { return ((long long)i * nz + j) * 2 + dir; };
+			std::map<long long, glm::vec2> pos;
+			std::map<long long, std::vector<long long>> adj;
+			auto crossing = [&](int i, int j, int dir) -> long long
+			{
+				long long k = key(i, j, dir);
+				if (!pos.count(k))
+				{
+					int i2 = dir == 0 ? i + 1 : i, j2 = dir == 0 ? j : j + 1;
+					float a = at(i, j), b = at(i2, j2), t = (a == b) ? 0.5f : a / (a - b);
+					pos[k] = glm::vec2(tx0 + ((float)i + (i2 - i) * t) / R, tz0 + ((float)j + (j2 - j) * t) / R);
+				}
+				return k;
+			};
+			for (int i = 0; i + 1 < nx; i++)
+				for (int j = 0; j + 1 < nz; j++)
+				{
+					int cs = (at(i, j) > 0 ? 1 : 0) | (at(i + 1, j) > 0 ? 2 : 0) | (at(i + 1, j + 1) > 0 ? 4 : 0) | (at(i, j + 1) > 0 ? 8 : 0);
+					if (cs == 0 || cs == 15) continue;
+					long long e[4] = { crossing(i, j, 0), crossing(i + 1, j, 1), crossing(i, j + 1, 0), crossing(i, j, 1) };	// bottom, right, top, left
+					static const int tab[16][4] = { {-1,-1,-1,-1}, {0,3,-1,-1}, {0,1,-1,-1}, {3,1,-1,-1}, {1,2,-1,-1}, {0,3,1,2}, {0,2,-1,-1}, {3,2,-1,-1},
+													{2,3,-1,-1}, {0,2,-1,-1}, {0,1,2,3}, {1,2,-1,-1}, {1,3,-1,-1}, {0,1,-1,-1}, {0,3,-1,-1}, {-1,-1,-1,-1} };
+					for (int q = 0; q < 4; q += 2)
+						if (tab[cs][q] >= 0) { long long a = e[tab[cs][q]], b = e[tab[cs][q + 1]]; adj[a].push_back(b); adj[b].push_back(a); }
+				}
+			std::vector<Poly> out;
+			std::set<long long> seen;
+			auto trace = [&](long long start, bool openStart) {
+				Poly pl; long long prev = -1, cur = start;
+				while (true)
+				{
+					seen.insert(cur); pl.p.push_back(pos[cur]);
+					long long nxt = -1;
+					for (auto n : adj[cur]) if (n != prev && !seen.count(n)) { nxt = n; break; }
+					if (nxt < 0)
+					{
+						for (auto n : adj[cur]) if (n == start && n != prev && pl.p.size() > 2) pl.closed = true;
+						break;
+					}
+					prev = cur; cur = nxt;
+				}
+				return pl;
+			};
+			for (auto& kv : adj) if (kv.second.size() == 1 && !seen.count(kv.first)) { auto pl = trace(kv.first, true); if (pl.p.size() > 3) out.push_back(pl); }
+			for (auto& kv : adj) if (!seen.count(kv.first)) { auto pl = trace(kv.first, false); if (pl.p.size() > 5) out.push_back(pl); }
+			for (auto& pl : out)
+			{
+				int n = (int)pl.p.size();
+				for (int pass = 0; pass < 3; pass++)		// smooth
+				{
+					auto q = pl.p;
+					for (int i = 0; i < n; i++)
+					{
+						if (!pl.closed && (i == 0 || i == n - 1)) continue;
+						q[i] = (pl.p[(i + n - 1) % n] + pl.p[i] * 2.0f + pl.p[(i + 1) % n]) * 0.25f;
+					}
+					pl.p = q;
+				}
+				// arc length
+				pl.s.assign(n, 0.0f);
+				for (int i = 1; i < n; i++) pl.s[i] = pl.s[i - 1] + glm::length(pl.p[i] - pl.p[i - 1]);
+				pl.L = pl.s[n - 1] + (pl.closed ? glm::length(pl.p[0] - pl.p[n - 1]) : 0.0f);
+				float per = std::max(0.5f, st.ribbonPeriod);
+				if (pl.closed) { int periods = std::max(1, (int)std::lround(pl.L / per)); pl.k = periods / pl.L; pl.period = (float)periods; }
+				else pl.k = 1.0f / per;
+			}
+			return out;
+		}
+
+		// cliff face as a ribbon: continuous UVs from distance across / along the cliff curve
+		void ribbonTiles(Gnd* gnd, GroupAction* ga, int& nextId, int tex, const std::vector<glm::ivec2>& tiles)
+		{
+			auto& st = settings();
+			if (centres.empty() || tiles.empty()) return;
+			float tx0 = 1e9f, tz0 = 1e9f, tx1 = -1e9f, tz1 = -1e9f;
+			for (auto& t : tiles) for (int i = 0; i < 4; i++)
+			{
+				glm::vec2 c = cornerPos(gnd, t.x, t.y, i);
+				tx0 = std::min(tx0, c.x); tx1 = std::max(tx1, c.x); tz0 = std::min(tz0, c.y); tz1 = std::max(tz1, c.y);
+			}
+			tx0 -= 2; tz0 -= 2; tx1 += 2; tz1 += 2;
+			auto polys = contours(st, tx0, tz0, tx1, tz1);
+			if (polys.empty()) return;
+			// is the inside of the brush the high side?
+			float meanH = 0; int cnt = 0;
+			for (auto& kv : origHeights) for (int i = 0; i < 4; i++) { meanH += kv.second[i]; cnt++; }
+			meanH = cnt ? meanH / cnt : 0.0f;
+			bool insideHigh = st.mode == 0 || (st.mode == 2 && st.height < meanH);
+			float w = std::max(0.5f, st.edgeWidth);
+			float span = st.ribbonBottom - st.ribbonTop, vmid = (st.ribbonTop + st.ribbonBottom) * 0.5f;
+			struct Hit { int ci; float d, u; };
+			auto eval = [&](const glm::vec2& p, int forceCi) -> Hit
+			{
+				Hit h{ -1, 0, 0 }; float best = 1e9f; int bi = 0;
+				for (int ci = 0; ci < (int)polys.size(); ci++)
+				{
+					if (forceCi >= 0 && ci != forceCi) continue;
+					for (int i = 0; i < (int)polys[ci].p.size(); i++)
+					{
+						float d2 = glm::dot(polys[ci].p[i] - p, polys[ci].p[i] - p);
+						if (d2 < best) { best = d2; h.ci = ci; bi = i; }
+					}
+				}
+				if (h.ci < 0) return h;
+				float sgn = fieldAt(st, p) >= 0 ? 1.0f : -1.0f;
+				float d = std::sqrt(best) * sgn;
+				d -= w * 0.5f;						// the contour is the foot of the slope; the band is centred on the slope
+				h.d = insideHigh ? d : -d;
+				h.u = polys[h.ci].k * polys[h.ci].s[bi];
+				return h;
+			};
+			for (auto& t : tiles)
+			{
+				auto c = gnd->cubes[t.x][t.y];
+				if (c->tileUp < 0) continue;
+				Hit hits[4];
+				for (int i = 0; i < 4; i++) hits[i] = eval(cornerPos(gnd, t.x, t.y, i), -1);
+				int c0 = 0; float bd = 1e9f;
+				for (int i = 0; i < 4; i++) if (hits[i].ci >= 0 && std::fabs(hits[i].d) < bd) { bd = std::fabs(hits[i].d); c0 = hits[i].ci; }
+				bool same = true; for (int i = 0; i < 4; i++) same &= hits[i].ci == c0;
+				if (!same) for (int i = 0; i < 4; i++) hits[i] = eval(cornerPos(gnd, t.x, t.y, i), c0);
+				float u[4], v[4], vmn = 9, vmx = -9;
+				for (int i = 0; i < 4; i++)
+				{
+					u[i] = st.ribbonFlip ? -hits[i].u : hits[i].u;
+					v[i] = vmid - span * hits[i].d / w;
+					vmn = std::min(vmn, v[i]); vmx = std::max(vmx, v[i]);
+				}
+				if (vmx < st.ribbonTop + 0.12f || vmn > st.ribbonBottom + 0.01f) continue;			// no rock in this tile
+				auto& pl = polys[c0];
+				if (pl.closed && pl.period > 0)
+					for (int i = 1; i < 4; i++) u[i] = u[0] + std::fmod(std::fmod(u[i] - u[0] + pl.period * 0.5f, pl.period) + pl.period, pl.period) - pl.period * 0.5f;
+				float umn = std::min(std::min(u[0], u[1]), std::min(u[2], u[3])), umx = std::max(std::max(u[0], u[1]), std::max(u[2], u[3]));
+				if (umx - umn > 0.9f) continue;
+				float shift = std::floor(umn);
+				for (int i = 0; i < 4; i++) { u[i] -= shift; v[i] = std::clamp(v[i], 0.0f, 1.0f); }
+				auto nt = new Gnd::Tile(*gnd->tiles[c->tileUp]);
+				nt->textureIndex = (short)tex;
+				nt->v1 = glm::vec2(u[0], v[0]); nt->v2 = glm::vec2(u[1], v[1]); nt->v3 = glm::vec2(u[2], v[2]); nt->v4 = glm::vec2(u[3], v[3]);
+				ga->addAction(new CubeTileChangeAction(t, c, nextId, c->tileFront, c->tileSide));
+				c->tileUp = nextId++;
+				ga->addAction(new TileNewAction(nt));
+			}
 		}
 
 		void finish(MapView* mv, BrowEdit* browEdit, Map* map, Gnd* gnd, GndRenderer* gr)
@@ -308,8 +472,15 @@ namespace cliff
 					}
 				}
 			}
+			// ribbon texturing for sloped cliffs (continuous UVs along the cliff curve)
+			bool ribbonDone = false;
+			if (s.profile == 0 && s.ribbon && !s.ribbonTex.empty())
+			{
+				int rt = textureIndexFor(gnd, s.ribbonTex);
+				if (rt >= 0) { { std::vector<glm::ivec2> rtiles; for (auto& r : region) rtiles.push_back(glm::ivec2(r.first, r.second)); ribbonTiles(gnd, ga, nextId, rt, rtiles); } ribbonDone = true; }
+			}
 			// slope texture: steep ground gets rock
-			if (s.profile == 0 && s.texSlope && !s.slopeTextures.empty())
+			if (s.profile == 0 && !ribbonDone && s.texSlope && !s.slopeTextures.empty())
 			{
 				for (auto& t : touched)
 				{
@@ -361,12 +532,14 @@ namespace cliff
 				strokeSeed = s.seed;
 				origHeights.clear(); weights.clear(); touched.clear();
 				lastCentre = glm::vec2(-1000.0f);
+				centres.clear();
 			}
 			if (glm::length(c - lastCentre) >= 0.5f)
 			{
 				int savedMode = s.mode;
 				if (io.KeyShift && s.mode < 2) s.mode = 1 - s.mode;
 				stamp(gnd, gr, c);
+				centres.push_back(c);
 				s.mode = savedMode;
 				lastCentre = c;
 			}
@@ -475,7 +648,19 @@ namespace cliff
 		}
 		else
 		{
-			ImGui::Checkbox("Texture steep slopes", &s.texSlope);
+			ImGui::Checkbox("Ribbon texture (continuous, follows the curve)", &s.ribbon);
+			if (s.ribbon)
+			{
+				ImGui::Text("Ribbon texture: %s", s.ribbonTex.empty() ? "(none)" : s.ribbonTex.c_str());
+				if (ImGui::Button("Use picker texture##ribbon") && gnd && mv->textureSelected >= 0 && mv->textureSelected < (int)gnd->textures.size())
+					s.ribbonTex = gnd->textures[mv->textureSelected]->file;
+				ImGui::SliderFloat("Cubes per repeat", &s.ribbonPeriod, 1.0f, 16.0f);
+				ImGui::SliderFloat("Rock band top (v)", &s.ribbonTop, 0.0f, 0.5f);
+				ImGui::SliderFloat("Rock band bottom (v)", &s.ribbonBottom, 0.5f, 1.0f);
+				ImGui::Checkbox("Flip direction", &s.ribbonFlip);
+				ImGui::TextWrapped("The rock band texture is laid along the cliff curve: u follows the curve, v goes across the slope, so it bends round corners without seams. Used instead of the random slope textures when set.");
+			}
+			ImGui::Checkbox("Texture steep slopes (random, when no ribbon)", &s.texSlope);
 			setEditor("Slope textures (random pick)", s.slopeTextures);
 		}
 		ImGui::TextWrapped("Pick a texture in the texture picker window, then press Add. Shift while painting flips raise/lower. Alt + wheel changes the radius. The whole stroke is one undo step; cliff faces appear when you release the mouse.");
