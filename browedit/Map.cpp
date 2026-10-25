@@ -1206,6 +1206,105 @@ void Map::exportMinimapWalkable(BrowEdit* browEdit)
 }
 
 
+// top-down picture of the ground (textures, tile colours, shadows and light colours), saved where the client looks for the minimap
+std::string Map::exportMinimapRendered(BrowEdit* browEdit, int size, bool shading, bool relief, bool padMagenta)
+{
+	auto gnd = rootNode->getComponent<Gnd>();
+	if (!gnd || gnd->width < 1 || gnd->height < 1)
+		return "No ground to render";
+	size = std::clamp(size, 64, 4096);
+	const int outW = size, outH = size;
+	std::vector<unsigned char> img((size_t)outW * outH * 3, 0);
+	if (padMagenta)
+		for (size_t i = 0; i < img.size(); i += 3) { img[i] = 255; img[i + 1] = 0; img[i + 2] = 255; }
+
+	float scale = std::min((float)outW / (10.0f * gnd->width), (float)outH / (10.0f * gnd->height));		// pixels per world unit
+	int contentW = std::max(1, (int)(10.0f * gnd->width * scale)), contentH = std::max(1, (int)(10.0f * gnd->height * scale));
+	int ox = (outW - contentW) / 2, oy = (outH - contentH) / 2;
+
+	std::vector<const advtex::Img*> imgs(gnd->textures.size(), nullptr);
+	for (size_t i = 0; i < gnd->textures.size(); i++)
+		imgs[i] = advtex::getImg(gnd->textures[i]->file);
+
+	// colour of one point of the ground; (wx, wzTop) are world units, wzTop counted from the top of the picture
+	auto sampleGround = [&](float wx, float wzTop, float out[3]) -> bool
+	{
+		int cx = (int)std::floor(wx / 10.0f), cy = (int)std::floor(wzTop / 10.0f);
+		if (cx < 0 || cy < 0 || cx >= gnd->width || cy >= gnd->height) return false;
+		float fx = wx / 10.0f - cx, fz = 1.0f - (wzTop / 10.0f - cy);
+		auto cube = gnd->cubes[cx][cy];
+		if (cube->tileUp < 0 || cube->tileUp >= (int)gnd->tiles.size()) return false;
+		auto tile = gnd->tiles[cube->tileUp];
+		float rgb[3] = { 128, 128, 128 };
+		if (tile->textureIndex >= 0 && tile->textureIndex < (int)imgs.size() && imgs[tile->textureIndex])
+		{
+			const advtex::Img& im = *imgs[tile->textureIndex];
+			glm::vec2 uv = (tile->v3 * (1 - fx) + tile->v4 * fx) * (1 - fz) + (tile->v1 * (1 - fx) + tile->v2 * fx) * fz;
+			float x = std::clamp(uv.x, 0.0f, 1.0f) * im.w - 0.5f, y = std::clamp(uv.y, 0.0f, 1.0f) * im.h - 0.5f;
+			int x0 = (int)std::floor(x), y0 = (int)std::floor(y);
+			float ax = x - x0, ay = y - y0;
+			auto at = [&](int xx, int yy, int c) { xx = std::clamp(xx, 0, im.w - 1); yy = std::clamp(yy, 0, im.h - 1); return (float)im.px[((size_t)yy * im.w + xx) * 4 + c]; };
+			for (int c = 0; c < 3; c++)
+			{
+				float a = at(x0, y0, c) * (1 - ax) + at(x0 + 1, y0, c) * ax, b = at(x0, y0 + 1, c) * (1 - ax) + at(x0 + 1, y0 + 1, c) * ax;
+				rgb[c] = a * (1 - ay) + b * ay;
+			}
+		}
+		for (int c = 0; c < 3; c++) rgb[c] *= tile->color[c] / 255.0f;
+		if (shading && tile->lightmapIndex >= 0 && tile->lightmapIndex < (int)gnd->lightmaps.size())
+		{
+			auto lm = gnd->lightmaps[tile->lightmapIndex];
+			int lw = gnd->lightmapWidth, lh = gnd->lightmapHeight;
+			int lx = std::clamp((int)(1 + fx * (lw - 2)), 0, lw - 1), ly = std::clamp((int)(1 + (1.0f - fz) * (lh - 2)), 0, lh - 1);
+			float shade = lm->data[lw * ly + lx] / 255.0f;
+			for (int c = 0; c < 3; c++)
+				rgb[c] = rgb[c] * (0.45f + 0.55f * shade) + lm->data[lw * lh + 3 * (lw * ly + lx) + c] * 0.5f;
+		}
+		if (relief)
+		{
+			// small hill shading from the ground's slope, so cliffs and hollows read on a flat picture
+			float hh = -((cube->h3 * (1 - fx) + cube->h4 * fx) * (1 - fz) + (cube->h1 * (1 - fx) + cube->h2 * fx) * fz);
+			float dx = -((cube->h2 + cube->h4) - (cube->h1 + cube->h3)) * 0.5f, dz = -((cube->h1 + cube->h2) - (cube->h3 + cube->h4)) * 0.5f;
+			(void)hh;
+			float l = std::clamp(1.0f + (dx * -0.5f + dz * 0.5f) * 0.02f, 0.6f, 1.4f);
+			for (int c = 0; c < 3; c++) rgb[c] *= l;
+		}
+		for (int c = 0; c < 3; c++) out[c] = rgb[c];
+		return true;
+	};
+
+	for (int py = 0; py < contentH; py++)
+		for (int px = 0; px < contentW; px++)
+		{
+			float acc[3] = { 0, 0, 0 }; int n = 0;
+			for (int sy = 0; sy < 2; sy++)
+				for (int sx = 0; sx < 2; sx++)
+				{
+					float c[3];
+					if (sampleGround((px + 0.25f + 0.5f * sx) / scale, (py + 0.25f + 0.5f * sy) / scale, c)) { for (int k = 0; k < 3; k++) acc[k] += c[k]; n++; }
+				}
+			if (n == 0) continue;
+			size_t o = ((size_t)(oy + py) * outW + (ox + px)) * 3;
+			for (int k = 0; k < 3; k++) img[o + k] = (unsigned char)std::clamp((int)std::lround(acc[k] / n), 0, 255);
+			if (n < 4 && padMagenta) for (int k = 0; k < 3; k++) img[o + k] = (unsigned char)std::clamp((int)std::lround((acc[k] + (k == 1 ? 0 : 255.0f) * (4 - n)) / 4.0f), 0, 255);
+		}
+
+	std::string mapName = name;
+	auto pos = mapName.find_last_of("\\/");
+	if (pos != std::string::npos) mapName = mapName.substr(pos + 1);
+	pos = mapName.rfind('.');
+	if (pos != std::string::npos) mapName = mapName.substr(0, pos);
+
+	std::string outDir = browEdit->config.ropath + "data\\texture\\\xc0\xaf\xc0\xfa\xc0\xce\xc5\xcd\xc6\xe4\xc0\xcc\xbd\xba\\map";
+	std::error_code ec;
+	std::filesystem::create_directories(outDir, ec);
+	std::string outPath = outDir + "\\" + mapName + ".bmp";
+	if (!stbi_write_bmp(outPath.c_str(), outW, outH, 3, img.data()))
+		return "Could not write " + outPath;
+	return "Saved " + outPath;
+}
+
+
 void Map::importTileColors(BrowEdit* browEdit, bool exportWalls)
 {
 	int wallMultiplier = 2;

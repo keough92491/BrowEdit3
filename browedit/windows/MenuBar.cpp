@@ -35,6 +35,10 @@
 namespace
 {
 	bool openTextureSheetPopup = false;
+	bool openMinimapPopup = false;
+	int minimapSize = 512;
+	bool minimapShading = true, minimapRelief = false, minimapPad = true;
+	std::string minimapResult;
 	char textureSheetPrefix[128] = "prontera_re";
 	std::string textureSheetResult;
 
@@ -464,6 +468,8 @@ void BrowEdit::menuBar()
 				activeMapView->map->exportTileColors(this, exportWalls);
 			if (ImGui::MenuItem("Export minimap"))
 				activeMapView->map->exportMinimapWalkable(this);
+			if (ImGui::MenuItem("Generate minimap (rendered)..."))
+				openMinimapPopup = true;
 			ImGui::Separator();
 			if (ImGui::MenuItem("Import shadowmap"))
 				activeMapView->map->importShadowMap(this, exportWalls, exportBorders);
@@ -694,6 +700,34 @@ void BrowEdit::menuBar()
 	if (ImGui::MenuItem("Help"))
 		windowData.helpWindowVisible = true;
 
+	if (openMinimapPopup)
+	{
+		ImGui::OpenPopup("Generate minimap");
+		openMinimapPopup = false;
+		minimapResult.clear();
+	}
+	if (ImGui::BeginPopupModal("Generate minimap", nullptr, ImGuiWindowFlags_AlwaysAutoResize))
+	{
+		ImGui::TextUnformatted("Top-down picture of the ground, saved as <map>.bmp in data\\texture\\(user interface)\\map");
+		ImGui::SetNextItemWidth(100);
+		ImGui::InputInt("Size (pixels, square)", &minimapSize, 64, 128);
+		minimapSize = std::clamp(minimapSize, 64, 4096);
+		ImGui::SameLine(); if (ImGui::SmallButton("128")) minimapSize = 128;
+		ImGui::SameLine(); if (ImGui::SmallButton("256")) minimapSize = 256;
+		ImGui::SameLine(); if (ImGui::SmallButton("512")) minimapSize = 512;
+		ImGui::Checkbox("Shadows and light colours", &minimapShading);
+		ImGui::Checkbox("Slope shading (shows cliffs and hollows)", &minimapRelief);
+		ImGui::Checkbox("Magenta padding (client transparent colour)", &minimapPad);
+		ImGui::TextWrapped("Objects and water are not drawn. This replaces the walkable-area minimap if you exported that earlier.");
+		if (ImGui::Button("Generate"))
+			minimapResult = activeMapView->map->exportMinimapRendered(this, minimapSize, minimapShading, minimapRelief, minimapPad);
+		ImGui::SameLine();
+		if (ImGui::Button("Close"))
+			ImGui::CloseCurrentPopup();
+		if (!minimapResult.empty())
+			ImGui::TextWrapped("%s", minimapResult.c_str());
+		ImGui::EndPopup();
+	}
 	if (openTextureSheetPopup)
 	{
 		ImGui::OpenPopup("Texture sheets");
