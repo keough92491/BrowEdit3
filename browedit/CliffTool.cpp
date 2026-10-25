@@ -221,9 +221,12 @@ namespace cliff
 		}
 		float newField(const Settings& st, const glm::vec2& p)
 		{
-			float m = -1e9f;
-			for (auto& c : centres) m = std::max(m, st.radius - noisyDistance(st, p, c));
-			return m;
+			if (centres.empty()) return -1e9f;
+			// the roughness noise only depends on the point, so the nearest centre decides (and the noise is evaluated once)
+			float best = 1e30f;
+			for (auto& c : centres) { glm::vec2 q = p - c; best = std::min(best, q.x * q.x + q.y * q.y); }
+			float n = fbm(p.x * st.noiseScale, p.y * st.noiseScale, strokeSeed) - 0.5f;
+			return st.radius - (std::sqrt(best) + n * 2.0f * st.roughness * st.radius * 0.5f);
 		}
 
 		float fieldAt(const Settings& st, const glm::vec2& p)
@@ -517,7 +520,7 @@ namespace cliff
 						auto it = curStore->pts.find(key);
 						has[i] = it != curStore->pts.end();
 						float dOld = has[i] ? it->second.d : 100.0f;
-						float dNew = -newField(s, cp);
+						float dNew = -(s.radius - noisyDistance(s, cp, c));		// earlier stamps are already folded into the stored field
 						d[i] = std::min(dNew, dOld);
 						ent[i] = has[i] ? it->second : CaveEnt();
 						if (dNew < dOld) ent[i].level = caveFloor;
@@ -667,6 +670,19 @@ namespace cliff
 			float sgn = st.caveEdgeFlip ? -1.0f : 1.0f;
 			const int M = advtex::MASK;
 			float limit = caveLimit(st);
+			// the field is smooth, so it is sampled once on a grid instead of for every pixel
+			const int GR = 8;
+			const int gnx = (int)std::ceil((tx1 - tx0) * GR) + 2, gnz = (int)std::ceil((tz1 - tz0) * GR) + 2;
+			std::vector<float> grid((size_t)gnx * gnz);
+			for (int i = 0; i < gnx; i++) for (int j = 0; j < gnz; j++) grid[(size_t)i * gnz + j] = -fieldAt(st, glm::vec2(tx0 + (float)i / GR, tz0 + (float)j / GR));
+			auto outsideDist = [&](const Settings&, const glm::vec2& p) -> float
+			{
+				float fx = (p.x - tx0) * GR, fz = (p.y - tz0) * GR;
+				int i = std::clamp((int)std::floor(fx), 0, gnx - 2), j = std::clamp((int)std::floor(fz), 0, gnz - 2);
+				float a = std::clamp(fx - i, 0.0f, 1.0f), b = std::clamp(fz - j, 0.0f, 1.0f);
+				auto g = [&](int ii, int jj) { return grid[(size_t)ii * gnz + jj]; };
+				return (g(i, j) * (1 - a) + g(i + 1, j) * a) * (1 - b) + (g(i, j + 1) * (1 - a) + g(i + 1, j + 1) * a) * b;
+			};
 			std::vector<advtex::LayeredCell> out;
 			for (auto& t : tiles)
 			{
