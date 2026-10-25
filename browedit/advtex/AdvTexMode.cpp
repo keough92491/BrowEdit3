@@ -40,6 +40,10 @@ namespace advtex
 	static float brushW = 3.0f, brushH = 3.0f;		// cells
 	static int brushShape = 0;						// 0 ellipse, 1 rectangle
 	static bool snapBrush = true;
+	// the permanent grid overlay
+	static bool gridShow = true, gridSnap = false;
+	static float gridStep = 10.0f, gridOffX = 0.0f, gridOffZ = 0.0f, gridWidth = 2.0f;
+	static glm::vec4 gridColor(1.0f, 0.0f, 0.0f, 1.0f);
 	static float brushOpacity = 1.0f, brushHardness = 0.5f;
 	static bool eraseMode = false;
 	static std::string statusLine;
@@ -343,6 +347,63 @@ namespace advtex
 		return pts;
 	}
 
+	// terrain height of a point inside cube (cx, cy): fx/fz 0..1 across the cube
+	static float cubeY(Gnd* gnd, int cx, int cy, float fx, float fz)
+	{
+		auto c = gnd->cubes[cx][cy];
+		float a = c->h3 * (1 - fx) + c->h4 * fx, b = c->h1 * (1 - fx) + c->h2 * fx;
+		return -(a * (1 - fz) + b * fz) + 0.5f;
+	}
+
+	static void drawGrid(MapView* mv, Gnd* gnd)
+	{
+		float step = std::max(0.5f, gridStep);
+		float W = 10.0f * gnd->width, zmin = 10.0f, zmax = 10.0f * gnd->height + 10.0f;
+		std::vector<float> v;
+		auto push = [&](float x, float y, float z) { v.insert(v.end(), { x, y, z, 0, 0 }); };
+		// lines that run along x (fixed z)
+		for (float z = zmin + std::fmod(std::fmod(gridOffZ - zmin, step) + step, step); z <= zmax + 0.001f; z += step)
+		{
+			int cy = std::clamp(gnd->height - (int)std::floor(std::min(z, zmax - 0.001f) / 10.0f), 0, gnd->height - 1);
+			float fz = (z - 10.0f * (gnd->height - cy)) / 10.0f;
+			for (int cx = 0; cx < gnd->width; cx++)
+			{
+				push(10.0f * cx, cubeY(gnd, cx, cy, 0, fz), z);
+				push(10.0f * cx + 10.0f, cubeY(gnd, cx, cy, 1, fz), z);
+			}
+		}
+		// lines that run along z (fixed x)
+		for (float x = std::fmod(std::fmod(gridOffX, step) + step, step); x <= W + 0.001f; x += step)
+		{
+			int cx = std::clamp((int)std::floor(std::min(x, W - 0.001f) / 10.0f), 0, gnd->width - 1);
+			float fx = (x - 10.0f * cx) / 10.0f;
+			for (int cy = 0; cy < gnd->height; cy++)
+			{
+				float Z = 10.0f * (gnd->height - cy);
+				push(x, cubeY(gnd, cx, cy, fx, 0), Z);
+				push(x, cubeY(gnd, cx, cy, fx, 1), Z + 10.0f);
+			}
+		}
+		if (v.empty()) return;
+		mv->simpleShader->use();
+		mv->simpleShader->setUniform(SimpleShader::Uniforms::projectionMatrix, mv->nodeRenderContext.projectionMatrix);
+		mv->simpleShader->setUniform(SimpleShader::Uniforms::viewMatrix, mv->nodeRenderContext.viewMatrix);
+		mv->simpleShader->setUniform(SimpleShader::Uniforms::modelMatrix, glm::mat4(1.0f));
+		mv->simpleShader->setUniform(SimpleShader::Uniforms::textureFac, 0.0f);
+		mv->simpleShader->setUniform(SimpleShader::Uniforms::color, gridColor);
+		mv->fbo->bind();
+		glBindBuffer(GL_ARRAY_BUFFER, 0);
+		glDisable(GL_TEXTURE_2D);
+		glEnableVertexAttribArray(0); glEnableVertexAttribArray(1);
+		glDisableVertexAttribArray(2); glDisableVertexAttribArray(3); glDisableVertexAttribArray(4);
+		glVertexAttribPointer(0, 3, GL_FLOAT, false, 5 * sizeof(float), &v[0]);
+		glVertexAttribPointer(1, 2, GL_FLOAT, false, 5 * sizeof(float), &v[3]);
+		glLineWidth(gridWidth);
+		glDrawArrays(GL_LINES, 0, (int)(v.size() / 5));
+		glLineWidth(1);
+		mv->fbo->unbind();
+	}
+
 	static float snapAxis(float v, float cells)
 	{
 		int c = std::max(1, (int)lroundf(cells));
@@ -357,12 +418,24 @@ namespace advtex
 		if (!gnd) return;
 		Project& P = project(mv->map, be);
 		auto& io = ImGui::GetIO();
+		if (gridShow) drawGrid(mv, gnd);
 		bool layerOk = P.selLayer >= 0 && P.selLayer < (int)P.layers.size();
 		glm::vec3 hit = mv->hovered || stroking || rectActive ? gnd->rayCast(mv->mouseRay) : NO_HIT;
 		bool ok = hit != NO_HIT;
 		glm::vec2 cur(ok ? hit.x : 0.0f, ok ? hit.z : 0.0f);
 		glm::ivec2 curCell(ok ? std::clamp((int)floorf(hit.x / 10.0f), 0, gnd->width - 1) : 0, ok ? std::clamp(gnd->height - (int)floorf(hit.z / 10.0f), 0, gnd->height - 1) : 0);
-		if (ok && tool == ToolBrush && snapBrush && !io.KeyShift) { cur.x = snapAxis(cur.x, brushW); cur.y = snapAxis(cur.y, brushH); }
+		if (ok && tool == ToolBrush && snapBrush && !io.KeyShift)
+		{
+			if (gridSnap)
+			{
+				// the brush centre sits on the middle of a grid cell (odd size) or on a grid line (even size)
+				auto sn = [&](float v, float off, float cells) {
+					float st = std::max(0.5f, gridStep);
+					return ((int)lroundf(cells)) % 2 == 1 ? (floorf((v - off) / st) + 0.5f) * st + off : roundf((v - off) / st) * st + off; };
+				cur.x = sn(cur.x, gridOffX, brushW); cur.y = sn(cur.y, gridOffZ, brushH);
+			}
+			else { cur.x = snapAxis(cur.x, brushW); cur.y = snapAxis(cur.y, brushH); }
+		}
 		bool wantInput = io.WantTextInput;
 		bool pickNow = ok && mv->hovered && ImGui::IsMouseClicked(0) && !wantInput && (tool == ToolPick || io.KeyAlt);
 
@@ -795,6 +868,23 @@ namespace advtex
 			if (ImGui::SliderFloat("Opacity %", &op, 1, 100)) brushOpacity = op / 100;
 			if (ImGui::SliderFloat("Hardness %", &hd, 0, 95)) brushHardness = hd / 100;
 			ImGui::Checkbox("Snap brush to cells", &snapBrush);
+			ImGui::Checkbox("Show grid", &gridShow);
+			if (gridShow || gridSnap)
+			{
+				ImGui::SetNextItemWidth(90);
+				ImGui::InputFloat("Grid size", &gridStep, 1.0f, 5.0f, "%.2f");
+				gridStep = std::clamp(gridStep, 0.5f, 200.0f);
+				ImGui::SameLine();
+				if (ImGui::SmallButton("2.5")) gridStep = 2.5f;
+				ImGui::SameLine(); if (ImGui::SmallButton("5")) gridStep = 5.0f;
+				ImGui::SameLine(); if (ImGui::SmallButton("10 = 1 cell")) gridStep = 10.0f;
+				ImGui::SameLine(); if (ImGui::SmallButton("20")) gridStep = 20.0f;
+				ImGui::SetNextItemWidth(90); ImGui::InputFloat("Offset X", &gridOffX, 0.5f, 2.5f, "%.2f");
+				ImGui::SameLine(); ImGui::SetNextItemWidth(90); ImGui::InputFloat("Offset Z", &gridOffZ, 0.5f, 2.5f, "%.2f");
+				ImGui::ColorEdit4("Grid colour", &gridColor.x, ImGuiColorEditFlags_NoInputs);
+				ImGui::SameLine(); ImGui::SetNextItemWidth(80); ImGui::SliderFloat("Line", &gridWidth, 1.0f, 4.0f, "%.1f");
+				ImGui::Checkbox("Brush snaps to this grid", &gridSnap);
+			}
 			ImGui::SameLine(); ImGui::Checkbox("Erase mode", &eraseMode);
 
 			ImGui::Separator();
