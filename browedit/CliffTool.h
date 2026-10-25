@@ -26,6 +26,8 @@ namespace cliff
 		int terraces = 1;
 		int seed = 1;
 		bool buildWalls = true;
+		bool autoGat = true;			// update the GAT with the cliff: heights, and cliff type (5) on steep ground / along walls
+		float gatSlope = 4.0f;			// height difference across one GAT cell (5 units wide) above which it becomes a cliff
 		bool randomSlice = true;
 		bool texSlope = true;
 		std::vector<std::string> wallTextures;

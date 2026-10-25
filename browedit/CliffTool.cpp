@@ -6,6 +6,8 @@
 #include <browedit/Node.h>
 #include <browedit/components/Gnd.h>
 #include <browedit/components/GndRenderer.h>
+#include <browedit/components/Gat.h>
+#include <browedit/actions/GatTileChangeAction.h>
 #include <browedit/actions/GroupAction.h>
 #include <browedit/actions/CubeHeightChangeAction.h>
 #include <browedit/actions/CubeTileChangeAction.h>
@@ -618,6 +620,82 @@ namespace cliff
 				}
 			}
 
+
+			// GAT: heights follow the new ground, steep cells and wall edges become cliff (type 5), flattened cells are released again
+			if (s.autoGat)
+			{
+				auto gat = map->rootNode->getComponent<Gat>();
+				if (gat && gat->width == gnd->width * 2 && gat->height == gnd->height * 2)
+				{
+					std::map<Gat::Cube*, float[4]> oldT, newT;
+					std::vector<glm::ivec2> selT;
+					std::map<std::pair<int, int>, bool> wantCliff;
+					std::set<std::pair<int, int>> touchedSet;
+					for (auto& t : touched) touchedSet.insert({ t.x, t.y });
+					auto gatHeights = [&](Gnd::Cube* cb, int k, float gh[4])
+					{
+						const float* nh = cb->heights;
+						float fu0 = (k % 2) / 2.0f, fu1 = fu0 + 0.5f, fv0 = (k >> 1) / 2.0f, fv1 = fv0 + 0.5f;
+						auto at = [&](float fu, float fv) { return (nh[0] * (1 - fu) + nh[1] * fu) * (1 - fv) + (nh[2] * (1 - fu) + nh[3] * fu) * fv; };
+						gh[0] = at(fu0, fv0); gh[1] = at(fu1, fv0); gh[2] = at(fu0, fv1); gh[3] = at(fu1, fv1);
+					};
+					for (auto& r : region)
+					{
+						auto cb = gnd->cubes[r.first][r.second];
+						for (int k = 0; k < 4; k++)
+						{
+							int gx = r.first * 2 + (k % 2), gy = r.second * 2 + (k >> 1);
+							float gh[4]; gatHeights(cb, k, gh);
+							float mn = std::min(std::min(gh[0], gh[1]), std::min(gh[2], gh[3])), mx = std::max(std::max(gh[0], gh[1]), std::max(gh[2], gh[3]));
+							wantCliff[{ gx, gy }] = (mx - mn) > s.gatSlope;
+							if (touchedSet.count(r))
+							{
+								auto gc = gat->cubes[gx][gy];
+								for (int i = 0; i < 4; i++) { oldT[gc][i] = gc->heights[i]; newT[gc][i] = gh[i]; }
+								selT.push_back(glm::ivec2(gx, gy));
+							}
+						}
+					}
+					// wall edges: the upper side cells are blocked
+					const float eps = 0.01f;
+					for (auto& r : region)
+					{
+						int x = r.first, y = r.second;
+						auto c = gnd->cubes[x][y];
+						if (x < gnd->width - 1)
+						{
+							auto n = gnd->cubes[x + 1][y];
+							if (std::fabs(c->h2 - n->h1) > eps || std::fabs(c->h4 - n->h3) > eps)
+							{
+								bool cUpper = (c->h2 + c->h4) < (n->h1 + n->h3);
+								int gx = cUpper ? x * 2 + 1 : (x + 1) * 2;
+								for (int k = 0; k < 2; k++) wantCliff[{ gx, y * 2 + k }] = true;
+							}
+						}
+						if (y < gnd->height - 1)
+						{
+							auto n = gnd->cubes[x][y + 1];
+							if (std::fabs(c->h3 - n->h1) > eps || std::fabs(c->h4 - n->h2) > eps)
+							{
+								bool cUpper = (c->h3 + c->h4) < (n->h1 + n->h2);
+								int gy = cUpper ? y * 2 + 1 : (y + 1) * 2;
+								for (int k = 0; k < 2; k++) wantCliff[{ x * 2 + k, gy }] = true;
+							}
+						}
+					}
+					if (!newT.empty())
+						ga->addAction(new CubeHeightChangeAction<Gat, Gat::Cube>(oldT, newT, selT));
+					for (auto& kv : wantCliff)
+					{
+						int gx = kv.first.first, gy = kv.first.second;
+						if (gx < 0 || gy < 0 || gx >= gat->width || gy >= gat->height) continue;
+						auto gc = gat->cubes[gx][gy];
+						int want = kv.second ? 5 : (gc->gatType == 5 ? 0 : gc->gatType);
+						if (gc->gatType != want)
+							ga->addAction(new GatTileChangeAction(glm::ivec2(gx, gy), gc, want));
+					}
+				}
+			}
 			for (auto& r : region)
 			{
 				gnd->cubes[r.first][r.second]->calcNormals(gnd, r.first, r.second);
@@ -723,6 +801,9 @@ namespace cliff
 		ImGui::InputInt("Shape seed", &s.seed);
 		ImGui::SameLine();
 		if (ImGui::Button("Random")) s.seed = (int)(ImGui::GetTime() * 1000.0) % 100000;
+		ImGui::Separator();
+		ImGui::Checkbox("Update the GAT (heights + cliff cells)", &s.autoGat);
+		if (s.autoGat) ImGui::SliderFloat("GAT cliff above (height per cell)", &s.gatSlope, 1.0f, 15.0f);
 		ImGui::Separator();
 		auto setEditor = [&](const char* title, std::vector<std::string>& set)
 		{
