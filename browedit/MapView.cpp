@@ -1,4 +1,6 @@
 #define IMGUI_DEFINE_MATH_OPERATORS
+#include <stb/stb_image_write.h>
+#include <filesystem>
 #include <browedit/sprite/SpriteSystem.h>
 #include <browedit/advtex/AdvTex.h>
 #include <Windows.h>
@@ -362,6 +364,82 @@ void MapView::toolbar(BrowEdit* browEdit)
 		ImGui::SetTooltip("Gadget thickness");
 	Gadget::opacity = gadgetOpacity;
 	Gadget::scale = gadgetScale;
+}
+
+std::string MapView::renderMinimap(BrowEdit* browEdit, int size, bool shading, const std::string& rootDir)
+{
+	auto gnd = map->rootNode->getComponent<Gnd>();
+	if (!gnd || gnd->width < 1 || gnd->height < 1)
+		return "No ground to render";
+	size = glm::clamp(size, 64, 4096);
+	const int ss = size * 2 <= 4096 ? 2 : 1;		// rendered twice as large, then averaged down
+	const int rs = size * ss;
+
+	// remember everything the view uses, so the editor looks the same afterwards
+	const int oldW = fbo->getWidth(), oldH = fbo->getHeight(), oldOW = outlineFbo->getWidth(), oldOH = outlineFbo->getHeight();
+	const bool sOrtho = ortho, sFog = viewFog, sGat = viewGat, sGatGat = viewGatGat, sEff = viewEffects, sIcons = viewEffectIcons, sSky = viewSkyMap, sSounds = viewSounds, sLights = viewLights, sShadow = viewLightmapShadow, sColor = viewLightmapColor, sHover = hovered;
+	const glm::vec2 sRot = cameraRot;
+	const float sDist = cameraDistance;
+	const glm::vec3 sCenter = cameraCenter, sBg = browEdit->config.backgroundColor;
+	auto sDelta = deltaCameraMove;
+	auto lubSky = map->rootNode->getComponent<LubSkyMap>();
+	const bool sLubSky = lubSky ? lubSky->isEnabled : false;
+
+	deltaCameraMove.position *= 0.0f; deltaCameraMove.rotation *= 0.0f; deltaCameraMove.distance = 0.0f;
+	outlineFbo->resize(rs, rs);
+	fbo->resize(rs, rs);
+	ortho = true;
+	cameraRot = glm::vec2(90.0f, 0.0f);
+	cameraDistance = 10.0f * (float)std::max(gnd->width, gnd->height);
+	cameraCenter = glm::vec3(5.0f * gnd->width, 0.0f, 5.0f * gnd->height + 10.0f);
+	viewFog = false; viewGat = false; viewGatGat = false; viewEffects = false; viewEffectIcons = false; viewSkyMap = false; viewSounds = false; viewLights = false;
+	viewLightmapShadow = shading; viewLightmapColor = shading;
+	hovered = false;
+	if (lubSky) lubSky->isEnabled = false;
+	browEdit->config.backgroundColor = glm::vec3(1.0f, 0.0f, 1.0f);		// the client's transparent colour
+
+	render(browEdit);
+
+	std::vector<unsigned char> data((size_t)rs * rs * 4);
+	fbo->use();
+	glGetTexImage(GL_TEXTURE_2D, 0, GL_RGBA, GL_UNSIGNED_BYTE, data.data());
+
+	// back to the normal view
+	browEdit->config.backgroundColor = sBg;
+	if (lubSky) lubSky->isEnabled = sLubSky;
+	hovered = sHover;
+	ortho = sOrtho; cameraRot = sRot; cameraDistance = sDist; cameraCenter = sCenter; deltaCameraMove = sDelta;
+	viewFog = sFog; viewGat = sGat; viewGatGat = sGatGat; viewEffects = sEff; viewEffectIcons = sIcons; viewSkyMap = sSky; viewSounds = sSounds; viewLights = sLights; viewLightmapShadow = sShadow; viewLightmapColor = sColor;
+	outlineFbo->resize(oldOW, oldOH);
+	fbo->resize(oldW, oldH);
+
+	std::vector<unsigned char> img((size_t)size * size * 3);
+	for (int y = 0; y < size; y++)
+		for (int x = 0; x < size; x++)
+		{
+			int acc[3] = { 0, 0, 0 };
+			for (int sy = 0; sy < ss; sy++)
+				for (int sx = 0; sx < ss; sx++)
+				{
+					int srcY = rs - 1 - (y * ss + sy);		// GL rows start at the bottom
+					const unsigned char* px = &data[((size_t)srcY * rs + (x * ss + sx)) * 4];
+					for (int c = 0; c < 3; c++) acc[c] += px[c];
+				}
+			for (int c = 0; c < 3; c++) img[((size_t)y * size + x) * 3 + c] = (unsigned char)(acc[c] / (ss * ss));
+		}
+
+	std::string mapName = map->name;
+	auto pos = mapName.find_last_of("\\/");
+	if (pos != std::string::npos) mapName = mapName.substr(pos + 1);
+	pos = mapName.rfind('.');
+	if (pos != std::string::npos) mapName = mapName.substr(0, pos);
+	std::string outDir = (rootDir.empty() ? browEdit->config.ropath : rootDir) + "data\\texture\\\xc0\xaf\xc0\xfa\xc0\xce\xc5\xcd\xc6\xe4\xc0\xcc\xbd\xba\\map";
+	std::error_code ec;
+	std::filesystem::create_directories(outDir, ec);
+	std::string outPath = outDir + "\\" + mapName + ".bmp";
+	if (!stbi_write_bmp(outPath.c_str(), size, size, 3, img.data()))
+		return "Could not write " + outPath;
+	return "Saved " + outPath;
 }
 
 void MapView::render(BrowEdit* browEdit)

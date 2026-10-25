@@ -34,6 +34,16 @@ void BrowEdit::showExportWindow()
 		{
 			windowData.exportFolder = util::iso_8859_1_to_utf8(util::SelectPathDialog(util::utf8_to_iso_8859_1(windowData.exportFolder)));
 		}
+		static bool exportMinimap = true;
+		static int exportMinimapSize = 512;
+		ImGui::Checkbox("Also generate the rendered minimap", &exportMinimap);
+		if (exportMinimap)
+		{
+			ImGui::SameLine();
+			ImGui::SetNextItemWidth(90);
+			ImGui::InputInt("px", &exportMinimapSize, 0, 0);
+			exportMinimapSize = std::clamp(exportMinimapSize, 64, 4096);
+		}
 		if (ImGui::Button("Export!"))
 		{
 			char buf[1024];
@@ -60,6 +70,12 @@ void BrowEdit::showExportWindow()
 					os.write(buf, count);
 				}
 				delete is;
+			}
+			if (exportMinimap && activeMapView && activeMapView->map == windowData.exportMap)
+			{
+				std::string root = util::utf8_to_iso_8859_1(windowData.exportFolder);
+				if (!root.empty() && root.back() != '\\' && root.back() != '/') root += "\\";
+				std::cout << activeMapView->renderMinimap(this, exportMinimapSize, true, root) << std::endl;
 			}
 			windowData.exportVisible = false;
 			ImGui::CloseCurrentPopup();

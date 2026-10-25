@@ -199,6 +199,8 @@ public:
 
 	void update(BrowEdit* browEdit, const ImVec2& size, float deltaTime);
 	void render(BrowEdit* browEdit);
+	// renders the whole map from straight above (ground, models, shadows, colours) as a client minimap; rootDir "" = the ro path
+	std::string renderMinimap(BrowEdit* browEdit, int size, bool shading, const std::string& rootDir);
 	void postRenderTextureMode(BrowEdit* browEdit);
 	void postRenderHeightMode(BrowEdit* browEdit);
 	void postRenderObjectMode(BrowEdit* browEdit);

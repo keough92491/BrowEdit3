@@ -708,7 +708,7 @@ void BrowEdit::menuBar()
 	}
 	if (ImGui::BeginPopupModal("Generate minimap", nullptr, ImGuiWindowFlags_AlwaysAutoResize))
 	{
-		ImGui::TextUnformatted("Top-down picture of the ground, saved as <map>.bmp in data\\texture\\(user interface)\\map");
+		ImGui::TextUnformatted("Top-down picture of the map, saved as <map>.bmp in data\\texture\\(user interface)\\map");
 		ImGui::SetNextItemWidth(100);
 		ImGui::InputInt("Size (pixels, square)", &minimapSize, 64, 128);
 		minimapSize = std::clamp(minimapSize, 64, 4096);
@@ -716,11 +716,9 @@ void BrowEdit::menuBar()
 		ImGui::SameLine(); if (ImGui::SmallButton("256")) minimapSize = 256;
 		ImGui::SameLine(); if (ImGui::SmallButton("512")) minimapSize = 512;
 		ImGui::Checkbox("Shadows and light colours", &minimapShading);
-		ImGui::Checkbox("Slope shading (shows cliffs and hollows)", &minimapRelief);
-		ImGui::Checkbox("Magenta padding (client transparent colour)", &minimapPad);
-		ImGui::TextWrapped("Objects and water are not drawn. This replaces the walkable-area minimap if you exported that earlier.");
+		ImGui::TextWrapped("Rendered from straight above with the ground, models, water, shadows and colours; the area outside the map is magenta (the client's transparent colour). This replaces the walkable-area minimap if you exported that earlier.");
 		if (ImGui::Button("Generate"))
-			minimapResult = activeMapView->map->exportMinimapRendered(this, minimapSize, minimapShading, minimapRelief, minimapPad);
+			minimapResult = activeMapView->renderMinimap(this, minimapSize, minimapShading, "");
 		ImGui::SameLine();
 		if (ImGui::Button("Close"))
 			ImGui::CloseCurrentPopup();
