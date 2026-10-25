@@ -238,6 +238,76 @@ namespace cliff
 					}
 				}
 			}
+			// smart edge texturing: pick straight / corner / diagonal piece per ground tile along the cliff and rotate it
+			if (s.profile == 1 && s.smartEdges)
+			{
+				int pidx[3];
+				for (int k = 0; k < 3; k++) pidx[k] = s.pieceTex[k].empty() ? -1 : textureIndexFor(gnd, s.pieceTex[k]);
+				if (pidx[0] >= 0 && pidx[1] >= 0 && pidx[2] >= 0)
+				{
+					const float eps = 0.01f;
+					const int DX[4] = { 1, -1, 0, 0 }, DY[4] = { 0, 0, 1, -1 };
+					auto cubeAt = [&](int x, int y) -> Gnd::Cube* { return (x >= 0 && y >= 0 && x < gnd->width && y < gnd->height) ? gnd->cubes[x][y] : nullptr; };
+					auto stepAcross = [&](int x, int y, int d) -> bool
+					{
+						auto c = gnd->cubes[x][y];
+						auto n = cubeAt(x + DX[d], y + DY[d]);
+						if (!n || n->tileUp < 0) return false;
+						if (d == 0) return std::fabs(c->h2 - n->h1) > eps || std::fabs(c->h4 - n->h3) > eps;
+						if (d == 1) return std::fabs(c->h1 - n->h2) > eps || std::fabs(c->h3 - n->h4) > eps;
+						if (d == 2) return std::fabs(c->h3 - n->h1) > eps || std::fabs(c->h4 - n->h2) > eps;
+						return std::fabs(c->h1 - n->h3) > eps || std::fabs(c->h2 - n->h4) > eps;
+					};
+					for (auto& r : region)
+					{
+						int x = r.first, y = r.second;
+						auto c = gnd->cubes[x][y];
+						if (c->tileUp < 0) continue;
+						bool st[4]; int count = 0;
+						for (int d = 0; d < 4; d++) { st[d] = stepAcross(x, y, d); count += st[d]; }
+						int piece = -1; float targetAngle = 0;
+						if (count == 0)
+						{
+							for (int dx = -1; dx <= 1 && piece < 0; dx += 2)
+								for (int dy = -1; dy <= 1 && piece < 0; dy += 2)
+								{
+									auto n = cubeAt(x + dx, y + dy);
+									if (!n || n->tileUp < 0) continue;
+									int ci = (dy == 1 ? 2 : 0) + (dx == 1 ? 1 : 0), ni = (dy == 1 ? 0 : 2) + (dx == 1 ? 0 : 1);
+									if (std::fabs(c->heights[ci] - n->heights[ni]) > eps) { piece = 1; targetAngle = std::atan2((float)dy, (float)dx); }
+								}
+						}
+						else if (count == 2 && ((st[0] || st[1]) && (st[2] || st[3])))
+						{
+							int dx = st[0] ? 1 : -1, dy = st[2] ? 1 : -1;
+							piece = 2; targetAngle = std::atan2((float)dy, (float)dx);
+						}
+						else
+						{
+							int d = 0; while (!st[d]) d++;
+							piece = 0; targetAngle = std::atan2((float)DY[d], (float)DX[d]);
+						}
+						if (piece < 0) continue;
+						float baseAngle = piece == 0 ? 1.5707963f : 3.9269908f;		// image: straight piece has rock up, the others rock at the lower left
+						int quarter = (int)std::lround((targetAngle - baseAngle) / 1.5707963f) + s.pieceRot[piece];
+						quarter = ((quarter % 4) + 4) % 4;
+						auto q = [&](float u, float v) -> glm::vec2
+						{
+							float a = -quarter * 1.5707963f, cs = std::round(std::cos(a)), sn = std::round(std::sin(a));
+							float px = u - 0.5f, py = v - 0.5f;
+							glm::vec2 res(px * cs - py * sn + 0.5f, px * sn + py * cs + 0.5f);
+							if (s.pieceFlip[piece]) res.x = 1.0f - res.x;
+							return res;
+						};
+						auto nt = new Gnd::Tile(*gnd->tiles[c->tileUp]);
+						nt->textureIndex = (short)pidx[piece];
+						nt->v1 = q(0, 0); nt->v2 = q(1, 0); nt->v3 = q(0, 1); nt->v4 = q(1, 1);
+						ga->addAction(new CubeTileChangeAction(glm::ivec2(x, y), c, nextId, c->tileFront, c->tileSide));
+						c->tileUp = nextId++;
+						ga->addAction(new TileNewAction(nt));
+					}
+				}
+			}
 			// slope texture: steep ground gets rock
 			if (s.profile == 0 && s.texSlope && !s.slopeTextures.empty())
 			{
@@ -385,6 +455,23 @@ namespace cliff
 			ImGui::Checkbox("Build cliff walls", &s.buildWalls);
 			ImGui::Checkbox("Random width slice per wall", &s.randomSlice);
 			setEditor("Cliff face textures (random pick)", s.wallTextures);
+			ImGui::Separator();
+			ImGui::Checkbox("Smart edge textures (ground pieces)", &s.smartEdges);
+			if (s.smartEdges)
+			{
+				static const char* names[3] = { "Straight edge", "Rounded corner", "Diagonal" };
+				for (int k = 0; k < 3; k++)
+				{
+					ImGui::PushID(k);
+					ImGui::Text("%s: %s", names[k], s.pieceTex[k].empty() ? "(none)" : s.pieceTex[k].c_str());
+					if (ImGui::Button("Use picker texture") && gnd && mv->textureSelected >= 0 && mv->textureSelected < (int)gnd->textures.size())
+						s.pieceTex[k] = gnd->textures[mv->textureSelected]->file;
+					ImGui::SameLine(); ImGui::SetNextItemWidth(80); ImGui::Combo("##rot", &s.pieceRot[k], "Rot 0\0Rot 90\0Rot 180\0Rot 270\0");
+					ImGui::SameLine(); ImGui::Checkbox("Flip", &s.pieceFlip[k]);
+					ImGui::PopID();
+				}
+				ImGui::TextWrapped("Pieces assumed: straight = rock on top, corner and diagonal = rock in the lower left. If a piece comes out turned, adjust its Rot/Flip once.");
+			}
 		}
 		else
 		{

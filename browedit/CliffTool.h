@@ -30,6 +30,11 @@ namespace cliff
 		bool texSlope = true;
 		std::vector<std::string> wallTextures;
 		std::vector<std::string> slopeTextures;
+		// smart edge texturing (sheer cliffs): ground pieces that blend rock into grass along the cliff
+		bool smartEdges = true;
+		std::string pieceTex[3];		// 0 straight edge, 1 rounded corner, 2 diagonal
+		int pieceRot[3] = { 0, 0, 0 };	// extra quarter turns
+		bool pieceFlip[3] = { false, false, false };
 	};
 	Settings& settings();
 	void showOptions(BrowEdit* browEdit, MapView* mapView);
