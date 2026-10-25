@@ -250,6 +250,20 @@ void BrowEdit::run()
 		HotkeyRegistry::showHotkeyPopup(this);
 
 		openWindow();
+		for (auto& changedFile : util::FileIO::pollChanges())	// live file reading: the tree is already updated, reload images that changed on disk
+		{
+			std::string l = changedFile;
+			for (auto& c : l) { if (c == '/') c = '\\'; c = (char)tolower((unsigned char)c); }
+			if (l.size() < 4 || (l.substr(l.size() - 4) != ".bmp" && l.substr(l.size() - 4) != ".tga" && l.substr(l.size() - 4) != ".png" && l.substr(l.size() - 4) != ".jpg" && l.substr(l.size() - 4) != ".gif"))
+				continue;
+			auto same = [&](gl::Texture* t) {
+				std::string f = t->fileName;
+				for (auto& c : f) { if (c == '/') c = '\\'; c = (char)tolower((unsigned char)c); }
+				return f == l;
+			};
+			for (auto t : util::ResourceManager<gl::Texture>::getAll()) if (same(t)) t->reload();
+			for (auto t : util::ResourceManager<gl::TexturePoT>::getAll()) if (same(t)) t->reload();
+		}
 		showExportWindow();
 		advtex::showSavePrompt(this);
 		if (windowData.undoVisible)
