@@ -252,10 +252,10 @@ namespace cliff
 			bool insideHigh = st.mode == 0 || (st.mode == 2 && st.height < meanH);
 			float w = std::max(0.5f, st.edgeWidth);
 			float span = st.ribbonBottom - st.ribbonTop, vmid = (st.ribbonTop + st.ribbonBottom) * 0.5f;
-			struct Hit { int ci; float d, u; };
+			struct Hit { int ci; float d, u; int bi; };
 			auto eval = [&](const glm::vec2& p, int forceCi) -> Hit
 			{
-				Hit h{ -1, 0, 0 }; float best = 1e9f; int bi = 0;
+				Hit h{ -1, 0, 0, 0 }; float best = 1e9f; int bi = 0;
 				for (int ci = 0; ci < (int)polys.size(); ci++)
 				{
 					if (forceCi >= 0 && ci != forceCi) continue;
@@ -270,37 +270,41 @@ namespace cliff
 				float d = std::sqrt(best) * sgn;
 				d -= w * 0.5f;						// the contour is the foot of the slope; the band is centred on the slope
 				h.d = insideHigh ? d : -d;
-				h.u = polys[h.ci].k * polys[h.ci].s[bi];
+				h.u = polys[h.ci].k * polys[h.ci].s[bi]; h.bi = bi;
 				return h;
 			};
 			for (auto& t : tiles)
 			{
 				auto c = gnd->cubes[t.x][t.y];
 				if (c->tileUp < 0) continue;
-				Hit hits[4];
-				for (int i = 0; i < 4; i++) hits[i] = eval(cornerPos(gnd, t.x, t.y, i), -1);
-				int c0 = 0; float bd = 1e9f;
-				for (int i = 0; i < 4; i++) if (hits[i].ci >= 0 && std::fabs(hits[i].d) < bd) { bd = std::fabs(hits[i].d); c0 = hits[i].ci; }
-				bool same = true; for (int i = 0; i < 4; i++) same &= hits[i].ci == c0;
-				if (!same) for (int i = 0; i < 4; i++) hits[i] = eval(cornerPos(gnd, t.x, t.y, i), c0);
+				// one planar mapping per tile: u runs along the cliff curve at the tile centre (tangent + arc length), v is the distance across.
+				// A single affine map can never fold or smear within a tile, unlike picking the nearest point on the curve for every corner.
+				glm::vec2 centre = (cornerPos(gnd, t.x, t.y, 0) + cornerPos(gnd, t.x, t.y, 3)) * 0.5f;
+				Hit hc = eval(centre, -1);
+				if (hc.ci < 0) continue;
+				auto& pl = polys[hc.ci];
+				int n = (int)pl.p.size();
+				int bi = hc.bi;
+				glm::vec2 tg = pl.p[std::min(n - 1, bi + 2)] - pl.p[std::max(0, bi - 2)];
+				if (pl.closed) tg = pl.p[(bi + 2) % n] - pl.p[(bi + n - 2) % n];
+				if (glm::length(tg) < 1e-5f) continue;
+				tg = glm::normalize(tg);
 				float u[4], v[4], vmn = 9, vmx = -9;
 				for (int i = 0; i < 4; i++)
 				{
-					u[i] = st.ribbonFlip ? -hits[i].u : hits[i].u;
-					v[i] = vmid - span * hits[i].d / w;
+					glm::vec2 cp = cornerPos(gnd, t.x, t.y, i);
+					Hit h = eval(cp, hc.ci);
+					u[i] = pl.k * (pl.s[bi] + glm::dot(cp - centre, tg)) * (st.ribbonFlip ? -1.0f : 1.0f);
+					v[i] = vmid - span * h.d / w;
 					vmn = std::min(vmn, v[i]); vmx = std::max(vmx, v[i]);
 				}
 				if (vmx < st.ribbonTop + 0.12f || vmn > st.ribbonBottom + 0.01f) continue;			// no rock in this tile
-				auto& pl = polys[c0];
-				if (pl.closed && pl.period > 0)
-					for (int i = 1; i < 4; i++) u[i] = u[0] + std::fmod(std::fmod(u[i] - u[0] + pl.period * 0.5f, pl.period) + pl.period, pl.period) - pl.period * 0.5f;
-				float umn = std::min(std::min(u[0], u[1]), std::min(u[2], u[3])), umx = std::max(std::max(u[0], u[1]), std::max(u[2], u[3]));
-				if (umx - umn > 0.9f) continue;
-				// streaks come from tiles lying mostly beyond the rock band: their clamped v is constant, so the edge pixels smear. Leave those as grass.
+				float umn = std::min(std::min(u[0], u[1]), std::min(u[2], u[3]));
+				// tiles lying mostly beyond the rock band would only smear the edge pixels: leave them as they were
 				{
 					int over = 0, under = 0;
-					for (int i = 0; i < 4; i++) { over += v[i] > 1.0f; under += v[i] < 0.0f; }
-					if (over >= 2 || under >= 2) continue;
+					for (int i = 0; i < 4; i++) { over += v[i] > 1.12f; under += v[i] < -0.12f; }
+					if (over >= 1 || under >= 1) continue;
 					if (vmn > st.ribbonBottom - 0.04f || vmx < st.ribbonTop + 0.04f) continue;
 				}
 				float shift = std::floor(umn);
