@@ -22,6 +22,15 @@ namespace cliff
 {
 	Settings& settings() { static Settings s; return s; }
 
+	void onTexturePicked(const std::string& file)
+	{
+		auto& s = settings();
+		if (!s.active || file.empty()) return;
+		auto add = [&](std::vector<std::string>& v) { if (std::find(v.begin(), v.end(), file) == v.end()) v.push_back(file); };
+		if (s.profile == 0) { add(s.slopeTextures); if (s.ribbon) s.ribbonTex = file; }
+		else add(s.wallTextures);
+	}
+
 	namespace
 	{
 		float hash2(int x, int y, int seed)
@@ -674,6 +683,6 @@ namespace cliff
 			ImGui::Checkbox("Texture steep slopes (random, when no ribbon)", &s.texSlope);
 			setEditor("Slope textures (random pick)", s.slopeTextures);
 		}
-		ImGui::TextWrapped("Pick a texture in the texture picker window, then press Add. Shift while painting flips raise/lower. Alt + wheel changes the radius. The whole stroke is one undo step; cliff faces appear when you release the mouse.");
+		ImGui::TextWrapped("Clicking a texture in the texture picker adds it to the active list (ribbon / slope textures, or cliff face textures for sheer cliffs); the Add buttons do the same for the picker selection. Shift while painting flips raise/lower. Alt + wheel changes the radius. The whole stroke is one undo step; cliff faces appear when you release the mouse.");
 	}
 }

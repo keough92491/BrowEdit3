@@ -44,6 +44,8 @@ namespace cliff
 		bool pieceFlip[3] = { false, false, false };
 	};
 	Settings& settings();
+	// called when a texture is clicked in the texture picker while the cliff brush is active: adds it to the active texture list
+	void onTexturePicked(const std::string& file);
 	void showOptions(BrowEdit* browEdit, MapView* mapView);
 	void update(MapView* mv, BrowEdit* browEdit, Map* map, Gnd* gnd, GndRenderer* gr, const glm::vec3& mouse3D);
 }
