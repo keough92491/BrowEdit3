@@ -16,6 +16,7 @@ namespace cliff
 	struct Settings
 	{
 		bool active = false;
+		bool continueCliff = true;		// a stroke that starts on an existing cliff keeps that cliff's height
 		// cave brush: carve a walkable floor into a rock mass
 		bool cave = false;
 		float caveSlope = 3.5f;			// wall slope width (tiles)

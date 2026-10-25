@@ -176,24 +176,25 @@ namespace cliff
 
 		// what earlier cave strokes left behind, per grid point of the ground: distance outside the floor, the ground level before the cave, and the floor level
 		struct CaveEnt { float d = 100.0f, base = 0.0f, level = 0.0f; };
-		struct CaveStore { std::unordered_map<int, CaveEnt> pts; bool loaded = false; bool dirty = false; int w = 0; std::string path; };
+		struct CaveStore { std::unordered_map<int, CaveEnt> pts; std::unordered_map<int, CaveEnt> cor; bool loaded = false; bool dirty = false; int w = 0; std::string path; };
 		std::map<Map*, CaveStore>& caveStores() { static std::map<Map*, CaveStore> m; return m; }
+		std::map<Map*, CaveStore>& cliffStores() { static std::map<Map*, CaveStore> m; return m; }
 		CaveStore* curStore = nullptr;
-		std::string cavePath(Map* map, BrowEdit* be)
+		std::string cavePath(Map* map, BrowEdit* be, bool cave)
 		{
 			std::string n = map->name;
 			std::string path = n.find(":") != std::string::npos ? n : be->config.ropath + n;
 			if (path.size() > 4 && path.substr(path.size() - 4) == ".rsw") path = path.substr(0, path.size() - 4);
-			return path + ".browcave.json";
+			return path + (cave ? ".browcave.json" : ".browcliff.json");
 		}
-		CaveStore& caveStore(Map* map, BrowEdit* be, Gnd* gnd)
+		CaveStore& caveStore(Map* map, BrowEdit* be, Gnd* gnd, bool cave = true)
 		{
-			auto& st = caveStores()[map];
+			auto& st = (cave ? caveStores() : cliffStores())[map];
 			st.w = gnd->width;
 			if (!st.loaded)
 			{
 				st.loaded = true;
-				st.path = cavePath(map, be);
+				st.path = cavePath(map, be, cave);
 				std::ifstream i(st.path, std::ios::binary);
 				if (i)
 				{
@@ -201,6 +202,7 @@ namespace cliff
 					{
 						nlohmann::json j; i >> j;
 						for (auto& e : j["pts"]) { CaveEnt ce; ce.d = e[1].get<float>(); ce.base = e[2].get<float>(); ce.level = e[3].get<float>(); st.pts[e[0].get<int>()] = ce; }
+						if (j.contains("cor")) for (auto& e : j["cor"]) { CaveEnt ce; ce.d = e[1].get<float>(); ce.base = e[2].get<float>(); ce.level = e[3].get<float>(); st.cor[e[0].get<int>()] = ce; }
 					}
 					catch (std::exception&) {}
 				}
@@ -227,7 +229,7 @@ namespace cliff
 		float fieldAt(const Settings& st, const glm::vec2& p)
 		{
 			float m = newField(st, p);
-			if (st.cave) m = std::max(m, -oldCaveDist(p));		// the cave that is already there stays part of the floor
+			if (curStore) m = std::max(m, -oldCaveDist(p));		// what earlier strokes made stays part of the shape
 			return m;
 		}
 
@@ -552,22 +554,88 @@ namespace cliff
 				}
 		}
 
+		std::map<int, std::pair<bool, CaveEnt>> corBefore;
+		typedef std::map<int, std::pair<bool, CaveEnt>> EntMap;
+
 		class CaveGridAction : public Action
 		{
-			std::map<int, std::pair<bool, CaveEnt>> before, after;
-			void apply(Map* map, BrowEdit* be, const std::map<int, std::pair<bool, CaveEnt>>& data)
+			EntMap before, after, corB, corA;
+			bool cave;
+			void apply(Map* map, BrowEdit* be, const EntMap& data, const EntMap& cdata)
 			{
 				auto gnd = map->rootNode->getComponent<Gnd>();
-				auto& st = caveStore(map, be, gnd);
+				auto& st = caveStore(map, be, gnd, cave);
 				for (auto& kv : data) { if (kv.second.first) st.pts[kv.first] = kv.second.second; else st.pts.erase(kv.first); }
+				for (auto& kv : cdata) { if (kv.second.first) st.cor[kv.first] = kv.second.second; else st.cor.erase(kv.first); }
 				st.dirty = true;
 			}
 		public:
-			CaveGridAction(const std::map<int, std::pair<bool, CaveEnt>>& b, const std::map<int, std::pair<bool, CaveEnt>>& a) : before(b), after(a) {}
-			void perform(Map* map, BrowEdit* be) override { apply(map, be, after); }
-			void undo(Map* map, BrowEdit* be) override { apply(map, be, before); }
-			std::string str() override { return "Cave shape"; }
+			CaveGridAction(bool cave, const EntMap& b, const EntMap& a, const EntMap& cb, const EntMap& ca) : before(b), after(a), corB(cb), corA(ca), cave(cave) {}
+			void perform(Map* map, BrowEdit* be) override { apply(map, be, after, corA); }
+			void undo(Map* map, BrowEdit* be) override { apply(map, be, before, corB); }
+			std::string str() override { return cave ? "Cave shape" : "Cliff shape"; }
 		};
+
+		float strokeDelta = 0.0f; bool strokeDeltaSet = false;
+		float weightOfF(const Settings& st, float F) { return levelWeight(st, st.radius - F); }
+
+		// cliff stroke on top of what is already there: base (ground before any cliff) and delta per cube corner are remembered,
+		// so overlapping or continued strokes merge instead of piling up
+		void stampCliff(Gnd* gnd, GndRenderer* gr, const glm::vec2& c)
+		{
+			auto& s = settings();
+			float reach = s.radius * (1.0f + s.roughness * 0.5f) + 2.0f;
+			int x0 = std::max(0, (int)std::floor(c.x - reach)), x1 = std::min(gnd->width - 1, (int)std::ceil(c.x + reach));
+			int y0 = std::max(0, (int)std::floor(gnd->height - c.y - reach)), y1 = std::min(gnd->height - 1, (int)std::ceil(gnd->height - c.y + reach));
+			for (int x = x0; x <= x1; x++)
+				for (int y = y0; y <= y1; y++)
+				{
+					auto cube = gnd->cubes[x][y];
+					glm::vec2 centre((float)x + 0.5f, (float)(gnd->height - y) + 0.5f);
+					float Fn[4], Fo[4];
+					for (int i = 0; i < 4; i++) { glm::vec2 cp = cornerPos(gnd, x, y, i); Fn[i] = newField(s, cp); Fo[i] = -oldCaveDist(cp); }
+					float Fnc = newField(s, centre), Foc = -oldCaveDist(centre);
+					float wN[4], wO[4], wUn[4]; bool any = false;
+					for (int i = 0; i < 4; i++)
+					{
+						float fn = s.profile == 1 ? Fnc : Fn[i], fo = s.profile == 1 ? Foc : Fo[i];
+						wN[i] = weightOfF(s, fn); wO[i] = weightOfF(s, fo); wUn[i] = weightOfF(s, std::max(fn, fo));
+						any |= wN[i] > 0;
+					}
+					if (!any) continue;
+					if (origHeights.find(cube) == origHeights.end())
+					{
+						for (int i = 0; i < 4; i++) { origHeights[cube][i] = cube->heights[i]; weights[cube][i] = 0.0f; }
+						touched.push_back(glm::ivec2(x, y));
+					}
+					for (int i = 0; i < 4; i++)
+					{
+						int ck = (y * gnd->width + x) * 4 + i;
+						auto it = curStore->cor.find(ck);
+						bool has = it != curStore->cor.end();
+						float o = origHeights[cube][i];
+						float base = has ? it->second.base : o;
+						float deltaNew = s.mode == 0 ? -s.height : s.mode == 1 ? s.height : (s.height - base);
+						if (s.mode < 2 && strokeDeltaSet) deltaNew = strokeDelta;
+						float delta = has ? (wN[i] > wO[i] + 1e-4f ? deltaNew : it->second.level) : deltaNew;
+						cube->heights[i] = base + delta * wUn[i];
+						weights[cube][i] = std::max(weights[cube][i], wUn[i]);
+						if (!corBefore.count(ck)) corBefore[ck] = { has, has ? it->second : CaveEnt() };
+						CaveEnt ce; ce.d = 0; ce.base = base; ce.level = delta;
+						if (wN[i] > 0 || has) curStore->cor[ck] = ce;
+						// lattice field (shared by the four cubes around the point)
+						glm::vec2 cp = cornerPos(gnd, x, y, i);
+						int key = latKey((int)std::lround(cp.x), (int)std::lround(cp.y), curStore->w);
+						auto lit = curStore->pts.find(key);
+						bool lhas = lit != curStore->pts.end();
+						if (!caveBefore.count(key)) caveBefore[key] = { lhas, lhas ? lit->second : CaveEnt() };
+						float Fl = std::max(Fn[i], Fo[i]);
+						if (Fl > -3.0f) { CaveEnt le; le.d = -Fl; le.base = 0; le.level = 0; curStore->pts[key] = le; }
+					}
+					cube->calcNormal();
+					gr->setChunkDirty(x, y);
+				}
+		}
 
 		// cave textures: floor (world tiled), rock (world tiled) over the wall and the top, and the edge strip laid along the wall foot (continuous UVs)
 		void caveBake(Map* map, BrowEdit* browEdit, Gnd* gnd, GroupAction* ga, const std::vector<glm::ivec2>& tiles)
@@ -678,11 +746,12 @@ namespace cliff
 					newHeights[kv.first][i] = kv.first->heights[i];
 			ga->addAction(new CubeHeightChangeAction<Gnd, Gnd::Cube>(origHeights, newHeights, touched));
 
-			if (s.cave && curStore)
+			if (curStore)
 			{
-				std::map<int, std::pair<bool, CaveEnt>> after;
+				EntMap after, corAfter;
 				for (auto& kv : caveBefore) { auto it = curStore->pts.find(kv.first); after[kv.first] = { it != curStore->pts.end(), it != curStore->pts.end() ? it->second : CaveEnt() }; }
-				ga->addAction(new CaveGridAction(caveBefore, after));
+				for (auto& kv : corBefore) { auto it = curStore->cor.find(kv.first); corAfter[kv.first] = { it != curStore->cor.end(), it != curStore->cor.end() ? it->second : CaveEnt() }; }
+				ga->addAction(new CaveGridAction(s.cave, caveBefore, after, corBefore, corAfter));
 			}
 			std::mt19937 rng((unsigned)strokeSeed * 7919u + (unsigned)touched.size());
 			auto pick = [&](const std::vector<std::string>& set) -> int {
@@ -997,25 +1066,30 @@ namespace cliff
 				gr->setChunkDirty(r.first, r.second);
 			}
 			map->doAction(ga, browEdit);
-			origHeights.clear(); weights.clear(); touched.clear(); caveBefore.clear();
+			origHeights.clear(); weights.clear(); touched.clear(); caveBefore.clear(); corBefore.clear(); strokeDeltaSet = false;
 			stroking = false;
 		}
 	}
 
 	void saveCave(Map* map, BrowEdit* browEdit)
 	{
-		auto it = caveStores().find(map);
-		if (it == caveStores().end() || !it->second.dirty || it->second.path.empty()) return;
-		nlohmann::json j; j["version"] = 1; j["pts"] = nlohmann::json::array();
-		for (auto& kv : it->second.pts) if (kv.second.d < 50.0f) j["pts"].push_back({ kv.first, kv.second.d, kv.second.base, kv.second.level });
-		std::string tmp = it->second.path + ".tmp";
-		{ std::ofstream o(tmp, std::ios::binary | std::ios::trunc); if (!o) return; o << j.dump(); }
-		std::error_code ec;
-		std::filesystem::rename(tmp, it->second.path, ec);
-		if (ec) { std::filesystem::remove(it->second.path, ec); std::filesystem::rename(tmp, it->second.path, ec); }
-		it->second.dirty = false;
+		for (int kind = 0; kind < 2; kind++)
+		{
+			auto& all = kind == 0 ? caveStores() : cliffStores();
+			auto it = all.find(map);
+			if (it == all.end() || !it->second.dirty || it->second.path.empty()) continue;
+			nlohmann::json j; j["version"] = 2; j["pts"] = nlohmann::json::array(); j["cor"] = nlohmann::json::array();
+			for (auto& kv : it->second.pts) if (kv.second.d < 50.0f) j["pts"].push_back({ kv.first, kv.second.d, kv.second.base, kv.second.level });
+			for (auto& kv : it->second.cor) j["cor"].push_back({ kv.first, kv.second.d, kv.second.base, kv.second.level });
+			std::string tmp = it->second.path + ".tmp";
+			{ std::ofstream o(tmp, std::ios::binary | std::ios::trunc); if (!o) continue; o << j.dump(); }
+			std::error_code ec;
+			std::filesystem::rename(tmp, it->second.path, ec);
+			if (ec) { std::filesystem::remove(it->second.path, ec); std::filesystem::rename(tmp, it->second.path, ec); }
+			it->second.dirty = false;
+		}
 	}
-	void forgetCave(Map* map) { caveStores().erase(map); }
+	void forgetCave(Map* map) { caveStores().erase(map); cliffStores().erase(map); }
 
 	void update(MapView* mv, BrowEdit* browEdit, Map* map, Gnd* gnd, GndRenderer* gr, const glm::vec3& mouse3D)
 	{
@@ -1023,7 +1097,7 @@ namespace cliff
 		bool valid = mouse3D.x >= 0 && mouse3D.z >= 0 && mouse3D.x <= gnd->width * 10.0f && mouse3D.z <= gnd->height * 10.0f;
 		glm::vec2 c(mouse3D.x / 10.0f, mouse3D.z / 10.0f);
 		auto& io = ImGui::GetIO();
-		curStore = s.cave ? &caveStore(map, browEdit, gnd) : nullptr;
+		curStore = &caveStore(map, browEdit, gnd, s.cave);
 
 		if (valid)
 		{
@@ -1042,7 +1116,17 @@ namespace cliff
 				origHeights.clear(); weights.clear(); touched.clear();
 				lastCentre = glm::vec2(-1000.0f);
 				centres.clear();
-				caveBefore.clear();
+				caveBefore.clear(); corBefore.clear(); strokeDeltaSet = false;
+				if (!s.cave && s.continueCliff && curStore && s.mode < 2 && -oldCaveDist(c) > 0.0f)
+				{
+					// starting on a cliff that already exists: keep its height
+					int cx = std::clamp((int)std::floor(c.x), 0, gnd->width - 1), cy = std::clamp(gnd->height - 1 - (int)std::floor(c.y), 0, gnd->height - 1);
+					for (int i = 0; i < 4 && !strokeDeltaSet; i++)
+					{
+						auto it = curStore->cor.find((cy * gnd->width + cx) * 4 + i);
+						if (it != curStore->cor.end() && std::fabs(it->second.level) > 0.01f) { strokeDelta = it->second.level; strokeDeltaSet = true; }
+					}
+				}
 				if (s.cave)
 				{
 					if (s.caveFloorAbs) caveFloor = s.caveFloorH;
@@ -1068,7 +1152,7 @@ namespace cliff
 			{
 				int savedMode = s.mode;
 				if (io.KeyShift && s.mode < 2) s.mode = 1 - s.mode;
-				if (s.cave) stampCave(gnd, gr, c); else stamp(gnd, gr, c);
+				if (s.cave) stampCave(gnd, gr, c); else stampCliff(gnd, gr, c);
 				centres.push_back(c);
 				s.mode = savedMode;
 				lastCentre = c;
@@ -1177,6 +1261,7 @@ namespace cliff
 		ImGui::RadioButton("Set height", &s.mode, 2);
 		ImGui::SliderFloat("Radius (tiles)", &s.radius, 0.5f, 40.0f);
 		ImGui::InputFloat(s.mode == 2 ? "Target height" : "Cliff height", &s.height, 1.0f, 5.0f, "%.2f");
+		if (s.mode < 2) ImGui::Checkbox("Continue the height of a cliff I start on", &s.continueCliff);
 		ImGui::Separator();
 		ImGui::RadioButton("Sloped cliff", &s.profile, 0); ImGui::SameLine();
 		ImGui::RadioButton("Sheer cliff (walls)", &s.profile, 1);
