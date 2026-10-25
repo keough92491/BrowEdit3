@@ -806,6 +806,8 @@ void Rsw::newMap(const std::string& fileName, int width, int height, Map* map, B
 	light.diffuse = glm::vec3(1, 1, 1);
 	light.ambient = glm::vec3(0.8f, 0.8f, 0.8f);
 	light.intensity = 0.5f;
+	// a new map has no fog settings in a file: without these the fog colour was uninitialised (black), which blacked out the whole view
+	fog.nearPlane = 0.5f; fog.farPlane = 10.0f; fog.factor = 0.5f; fog.color = glm::vec4(0.8f, 0.85f, 0.95f, 1.0f);
 	water.splitWidth = 1;
 	water.splitHeight = 1;
 	water.zones.resize(water.splitWidth, std::vector<Rsw::Water>(water.splitHeight));

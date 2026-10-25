@@ -99,7 +99,7 @@ public:
 		float nearPlane = 0.0f;
 		float farPlane = 1.0f;
 		float factor = 0.5f;
-		glm::vec4 color;
+		glm::vec4 color = glm::vec4(0.8f, 0.85f, 0.95f, 1.0f);
 	} fog;
 
 
