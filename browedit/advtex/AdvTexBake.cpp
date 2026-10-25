@@ -45,8 +45,9 @@ namespace advtex
 
 	std::string atlasFile(Project& P, Map* map, int id)
 	{
-		char buf[16]; snprintf(buf, sizeof(buf), "%04d", id);
-		std::string name = mapBase(map) + "_at_" + buf + ".bmp";
+		std::string num = std::to_string(id);
+		while (num.size() < 4) num = "0" + num;
+		std::string name = mapBase(map) + "_at_" + num + ".bmp";
 		return P.folder.empty() ? name : P.folder + "\\" + name;
 	}
 
@@ -577,8 +578,9 @@ namespace advtex
 		for (auto& l : P.layers) j["layers"].push_back({ {"tex", util::iso_8859_1_to_utf8(l.tex)}, {"tiling", l.tiling} });
 		for (auto& a : P.atlases)
 		{
-			char h[32]; snprintf(h, sizeof(h), "%llx", (unsigned long long)a.hash);
-			j["atlases"].push_back({ {"id", a.id}, {"file", util::iso_8859_1_to_utf8(a.file)}, {"size", a.size}, {"cellPx", a.cellPx}, {"hash", std::string(h)}, {"retired", a.retired}, {"slots", a.slots} });
+			std::ostringstream hs; hs << std::hex << (unsigned long long)a.hash;
+			std::string h = hs.str();
+			j["atlases"].push_back({ {"id", a.id}, {"file", util::iso_8859_1_to_utf8(a.file)}, {"size", a.size}, {"cellPx", a.cellPx}, {"hash", h}, {"retired", a.retired}, {"slots", a.slots} });
 		}
 		for (auto& kv : P.cells)
 		{
