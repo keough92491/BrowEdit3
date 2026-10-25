@@ -8,8 +8,11 @@
 #include <cstdint>
 
 class Map;
+class Gnd;
 class MapView;
 class BrowEdit;
+
+namespace gl { class Texture; }
 
 namespace advtex
 {
@@ -22,7 +25,14 @@ namespace advtex
 	inline int keyX(int k) { return k & 0xFFFF; }
 	inline int keyY(int k) { return k >> 16; }
 
-	struct PaintLayer { std::string tex; float tiling = 2.0f; };		// tex is relative to data\texture\ (raw cp949), tiling = cells per repeat
+	struct PaintLayer
+	{
+		std::string tex;				// relative to data\texture\ (raw cp949)
+		float tiling = 2.0f;			// cells per repeat
+		int rot = 0;					// 0..3 = 0, 90, 180, 270 degrees
+		bool flipH = false, flipV = false;
+		float offX = 0.0f, offY = 0.0f;	// in repeats
+	};
 	struct Orig { bool valid = false; std::string file; float uv[8] = { 0,0,0,0,0,0,0,0 }; };	// the tile as it was before the first bake
 	typedef std::map<int, std::vector<uint8_t>> Masks;					// layer index -> MASK*MASK alpha
 
@@ -33,6 +43,7 @@ namespace advtex
 		int atlas = -1, slot = -1;
 		bool hasTile = false;			// the cube owns a private tile that points to the atlas
 		bool dirty = true;
+		bool prevOk = false;			// the live preview texture holds this cell (not saved)
 	};
 	struct Atlas
 	{
@@ -44,6 +55,8 @@ namespace advtex
 		bool dirty = true;
 		bool retired = false;
 		std::vector<uint8_t> rgba;		// render cache (not saved)
+		bool complete = false;			// the cache holds every cell of the atlas
+		gl::Texture* prev = nullptr;	// live preview texture (not saved)
 	};
 	struct Project
 	{
@@ -58,6 +71,8 @@ namespace advtex
 		bool loaded = false, pending = false;
 		std::string path, status;
 		int selLayer = 0;
+		std::set<int> touched;			// cells whose preview has to be re-rendered
+		double lastEdit = 0;
 	};
 
 	bool isEmptyCell(const Cell& c);
@@ -76,7 +91,14 @@ namespace advtex
 	void forget(Map* map);
 	Project& project(Map* map, BrowEdit* be);
 
+	Project* findProject(Map* map);
+	bool assignSlot(Project& P, Map* map, int k, Cell& c);
+	Atlas* atlasById(Project& P, int id);
+	void renderCellToAtlas(Gnd* gnd, Project& P, Atlas& A, int k, Cell& c);
+
 	// UI (AdvTexMode.cpp)
+	void frame(MapView* mv, BrowEdit* be);		// every frame, every mode: live preview + delayed bake
+	void showLayerPicker(BrowEdit* be);
 	void showWindow(BrowEdit* be);
 	void postRender(MapView* mv, BrowEdit* be);
 }

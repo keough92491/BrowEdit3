@@ -115,11 +115,11 @@ namespace advtex
 		int block = A.cellPx + 2 * PAD, perRow = A.size / block;
 		int bx = (c.slot % perRow) * block, by = (c.slot / perRow) * block;
 		const Img* base = c.orig.valid ? getImg(c.orig.file) : nullptr;
-		struct L { const Img* img; const std::vector<uint8_t>* mask; float tiling; };
+		struct L { const Img* img; const std::vector<uint8_t>* mask; const PaintLayer* pl; };
 		std::vector<L> layers;
 		for (auto& m : c.masks)
 			if (m.first >= 0 && m.first < (int)P.layers.size())
-				layers.push_back({ getImg(P.layers[m.first].tex), &m.second, std::max(0.1f, P.layers[m.first].tiling) });
+				layers.push_back({ getImg(P.layers[m.first].tex), &m.second, &P.layers[m.first] });
 		// original uv corners: v1 (s0,t1) v2 (s1,t1) v3 (s0,t0) v4 (s1,t0)
 		const float* uv = c.orig.uv;
 		glm::vec2 v1(uv[0], uv[1]), v2(uv[2], uv[3]), v3(uv[4], uv[5]), v4(uv[6], uv[7]);
@@ -140,7 +140,13 @@ namespace advtex
 					float a = sampleMask(*l.mask, s, t);
 					if (a <= 0.0f) continue;
 					float oc[3];
-					sampleImg(*l.img, wx / (10.0f * l.tiling), wz / (10.0f * l.tiling), true, oc);
+					float tl = std::max(0.1f, l.pl->tiling), u = wx / (10.0f * tl), v = wz / (10.0f * tl);
+					if (l.pl->flipH) u = -u;
+					if (l.pl->flipV) v = -v;
+					if (l.pl->rot == 1) { float t2 = u; u = -v; v = t2; }
+					else if (l.pl->rot == 2) { u = -u; v = -v; }
+					else if (l.pl->rot == 3) { float t2 = u; u = v; v = -t2; }
+					sampleImg(*l.img, u + l.pl->offX, v + l.pl->offY, true, oc);
 					for (int q = 0; q < 3; q++) col[q] = col[q] * (1 - a) + oc[q] * a;
 				}
 				int px = bx + PAD + i, py = by + PAD + j;
@@ -148,6 +154,26 @@ namespace advtex
 				for (int q = 0; q < 3; q++) d[q] = (uint8_t)std::clamp((int)lroundf(col[q]), 0, 255);
 				d[3] = 255;
 			}
+	}
+
+	void renderCellToAtlas(Gnd* gnd, Project& P, Atlas& A, int k, Cell& c) { renderCell(gnd, P, A, k, c); }
+	Atlas* atlasById(Project& P, int id) { for (auto& a : P.atlases) if (a.id == id) return &a; return nullptr; }
+	Project* findProject(Map* map) { auto it = projects.find(map); return it == projects.end() ? nullptr : &it->second; }
+
+	// gives a painted cell a stable slot in an atlas (new atlas ids are never reused)
+	bool assignSlot(Project& P, Map* map, int k, Cell& c)
+	{
+		int block = P.cellPx + 2 * PAD, perRow = P.atlasSize / block, slotCount = perRow * perRow;
+		for (auto& a : P.atlases)
+		{
+			if (a.retired || a.size != P.atlasSize || a.cellPx != P.cellPx) continue;
+			for (int s = 0; s < (int)a.slots.size(); s++)
+				if (a.slots[s] < 0) { a.slots[s] = k; c.atlas = a.id; c.slot = s; a.dirty = true; return true; }
+		}
+		Atlas a; a.id = P.nextAtlasId++; a.file = atlasFile(P, map, a.id); a.size = P.atlasSize; a.cellPx = P.cellPx; a.slots.assign(slotCount, -1);
+		a.slots[0] = k; c.atlas = a.id; c.slot = 0; a.dirty = true;
+		P.atlases.push_back(a);
+		return true;
 	}
 
 	// ------------------------------------------------------------------ quantizer (median cut on a 5-5-5 histogram) + BMP writer
@@ -292,7 +318,7 @@ namespace advtex
 		if (rebuildAll)
 		{
 			clearImageCache();
-			for (auto& a : P.atlases) { a.retired = true; a.rgba.clear(); std::fill(a.slots.begin(), a.slots.end(), -1); }
+			for (auto& a : P.atlases) { a.retired = true; a.rgba.clear(); a.complete = false; std::fill(a.slots.begin(), a.slots.end(), -1); }
 			for (auto& kv : P.cells) { kv.second.atlas = kv.second.slot = -1; kv.second.dirty = true; }
 		}
 
@@ -302,24 +328,12 @@ namespace advtex
 			if (isEmptyCell(kv.second)) restore.push_back(kv.first);
 
 		// give every painted cell a stable slot
-		auto allocate = [&](int k, Cell& c) {
-			for (auto& a : P.atlases)
-			{
-				if (a.retired || a.size != P.atlasSize || a.cellPx != P.cellPx) continue;
-				for (int s = 0; s < (int)a.slots.size(); s++)
-					if (a.slots[s] < 0) { a.slots[s] = k; c.atlas = a.id; c.slot = s; a.dirty = true; return; }
-			}
-			Atlas a; a.id = P.nextAtlasId++; a.file = atlasFile(P, map, a.id); a.size = P.atlasSize; a.cellPx = P.cellPx; a.slots.assign(slotCount, -1);
-			a.slots[0] = k; c.atlas = a.id; c.slot = 0; a.dirty = true;
-			P.atlases.push_back(a);
-		};
-		auto atlasById = [&](int id) -> Atlas* { for (auto& a : P.atlases) if (a.id == id) return &a; return nullptr; };
 		for (auto& kv : P.cells)
 		{
 			Cell& c = kv.second;
 			if (isEmptyCell(c) || !c.orig.valid) continue;
-			if (c.slot < 0 || !atlasById(c.atlas)) allocate(kv.first, c);
-			if (c.dirty) if (auto a = atlasById(c.atlas)) a->dirty = true;
+			if (c.slot < 0 || !atlasById(P, c.atlas)) assignSlot(P, map, kv.first, c);
+			if (c.dirty) if (auto a = atlasById(P, c.atlas)) a->dirty = true;
 		}
 
 		// render + quantize + write to temp files
@@ -329,8 +343,8 @@ namespace advtex
 		for (auto& a : P.atlases)
 		{
 			if (a.retired || !a.dirty) continue;
-			bool full = a.rgba.size() != (size_t)a.size * a.size * 4;
-			if (full) a.rgba.assign((size_t)a.size * a.size * 4, 0);
+			bool full = !a.complete || a.rgba.size() != (size_t)a.size * a.size * 4;
+			if (a.rgba.size() != (size_t)a.size * a.size * 4) a.rgba.assign((size_t)a.size * a.size * 4, 0);
 			for (int s = 0; s < (int)a.slots.size(); s++)
 			{
 				if (a.slots[s] < 0) continue;
@@ -338,6 +352,7 @@ namespace advtex
 				if (it == P.cells.end() || isEmptyCell(it->second)) continue;
 				if (full || it->second.dirty) renderCell(gnd, P, a, a.slots[s], it->second);
 			}
+			a.complete = true;
 			Quant q; quantize(a.rgba, a.size, a.size, q);
 			uint64_t h = fnv(q.idx.data(), q.idx.size());
 			h = fnv(q.pal, sizeof(q.pal), h);
@@ -381,6 +396,12 @@ namespace advtex
 
 		// files are in place: now the gnd
 		int touched = 0;
+		auto markChunk = [&](int x, int y) {
+			if (!gndRenderer) return;
+			int cy = y / CHUNKSIZE, cx = x / CHUNKSIZE;
+			if (cy >= 0 && cy < (int)gndRenderer->chunks.size() && cx >= 0 && cx < (int)gndRenderer->chunks[cy].size() && gndRenderer->chunks[cy][cx])
+				gndRenderer->chunks[cy][cx]->dirty = true;
+		};
 		for (auto& a : P.atlases)
 		{
 			if (a.retired) continue;
@@ -399,6 +420,7 @@ namespace advtex
 				if (x >= gnd->width || y >= gnd->height) continue;
 				Gnd::Cube* cube = gnd->cubes[x][y];
 				if (cube->tileUp < 0) continue;
+				bool newTile = !c.hasTile;
 				if (!c.hasTile)
 				{
 					gnd->tiles.push_back(new Gnd::Tile(*gnd->tiles[cube->tileUp]));	// copy on write: the old tile may be shared with other cubes
@@ -406,11 +428,13 @@ namespace advtex
 					c.hasTile = true;
 				}
 				Gnd::Tile* t = gnd->tiles[cube->tileUp];
-				t->textureIndex = (short)texIdx;
 				float bx = (float)((c.slot % perRowA) * blockA + PAD), by = (float)((c.slot / perRowA) * blockA + PAD);
+				glm::vec2 o1 = t->v1, o2 = t->v2, o3 = t->v3, o4 = t->v4; short oldTex = t->textureIndex;
+				t->textureIndex = (short)texIdx;
 				setTileUV(t, bx / a.size, by / a.size, (bx + a.cellPx) / a.size, (by + a.cellPx) / a.size);
+				if (oldTex != t->textureIndex || o1 != t->v1 || o2 != t->v2 || o3 != t->v3 || o4 != t->v4 || newTile) { markChunk(x, y); touched++; }
 				c.dirty = false;
-				touched++;
+				c.prevOk = false;
 			}
 		}
 		for (int k : restore)
@@ -426,10 +450,11 @@ namespace advtex
 					t->textureIndex = (short)ensureTexture(gnd, c.orig.file);
 					t->v1 = glm::vec2(c.orig.uv[0], c.orig.uv[1]); t->v2 = glm::vec2(c.orig.uv[2], c.orig.uv[3]);
 					t->v3 = glm::vec2(c.orig.uv[4], c.orig.uv[5]); t->v4 = glm::vec2(c.orig.uv[6], c.orig.uv[7]);
+					markChunk(x, y);
 					touched++;
 				}
 			}
-			if (auto a = atlasById(c.atlas)) if (c.slot >= 0 && c.slot < (int)a->slots.size()) a->slots[c.slot] = -1;
+			if (auto a = atlasById(P, c.atlas)) if (c.slot >= 0 && c.slot < (int)a->slots.size()) a->slots[c.slot] = -1;
 			P.cells.erase(k);
 		}
 
@@ -437,7 +462,7 @@ namespace advtex
 		for (auto& o : outs)
 			if (o.write)
 				util::ResourceManager<gl::Texture>::load("data\\texture\\" + o.a->file)->reload();
-		if (gndRenderer) gndRenderer->setChunksDirty();
+		P.touched.clear();
 		if (touched || written) map->changed = true;
 		P.pending = false;
 		msg = "Baked: " + std::to_string(written) + " texture(s) written, " + std::to_string(touched) + " cell(s) updated";
@@ -534,7 +559,12 @@ namespace advtex
 			auto j = nlohmann::json::parse(i);
 			P.folder = j.value("folder", P.folder); P.cellPx = j.value("cellPx", 30); P.atlasSize = j.value("atlasSize", 512);
 			P.nextAtlasId = j.value("nextAtlasId", 1); P.autoBake = j.value("autoBake", true);
-			for (auto& l : j["layers"]) P.layers.push_back({ util::utf8_to_iso_8859_1(l.value("tex", std::string())), l.value("tiling", 2.0f) });
+			for (auto& l : j["layers"])
+			{
+				PaintLayer pl; pl.tex = util::utf8_to_iso_8859_1(l.value("tex", std::string())); pl.tiling = l.value("tiling", 2.0f);
+				pl.rot = l.value("rot", 0); pl.flipH = l.value("flipH", false); pl.flipV = l.value("flipV", false); pl.offX = l.value("offX", 0.0f); pl.offY = l.value("offY", 0.0f);
+				P.layers.push_back(pl);
+			}
 			for (auto& a : j["atlases"])
 			{
 				Atlas A; A.id = a.value("id", 0); A.file = util::utf8_to_iso_8859_1(a.value("file", std::string())); A.size = a.value("size", 512); A.cellPx = a.value("cellPx", 30);
@@ -575,7 +605,7 @@ namespace advtex
 		nlohmann::json j;
 		j["version"] = 1; j["folder"] = P.folder; j["cellPx"] = P.cellPx; j["atlasSize"] = P.atlasSize; j["nextAtlasId"] = P.nextAtlasId; j["autoBake"] = P.autoBake;
 		j["layers"] = nlohmann::json::array(); j["atlases"] = nlohmann::json::array(); j["cells"] = nlohmann::json::array();
-		for (auto& l : P.layers) j["layers"].push_back({ {"tex", util::iso_8859_1_to_utf8(l.tex)}, {"tiling", l.tiling} });
+		for (auto& l : P.layers) j["layers"].push_back({ {"tex", util::iso_8859_1_to_utf8(l.tex)}, {"tiling", l.tiling}, {"rot", l.rot}, {"flipH", l.flipH}, {"flipV", l.flipV}, {"offX", l.offX}, {"offY", l.offY} });
 		for (auto& a : P.atlases)
 		{
 			std::ostringstream hs; hs << std::hex << (unsigned long long)a.hash;
@@ -614,7 +644,13 @@ namespace advtex
 		return P;
 	}
 
-	void forget(Map* map) { projects.erase(map); }
+	void forget(Map* map)
+	{
+		auto it = projects.find(map);
+		if (it == projects.end()) return;
+		for (auto& a : it->second.atlases) delete a.prev;
+		projects.erase(it);
+	}
 
 	void onSave(Map* map, BrowEdit* be)
 	{

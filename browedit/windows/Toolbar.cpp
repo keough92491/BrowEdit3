@@ -71,8 +71,6 @@ void BrowEdit::toolbar()
 	ImGui::SameLine();
 	toolBarToggleButton("shadow", ICON_EDIT_SHADOW, editMode == EditMode::Shadow, "Shadow edit mode", HotkeyAction::EditMode_Shadow, config.toolbarButtonsWallEdit);
 	ImGui::SameLine();
-	toolBarToggleButton("advtexture", ICON_EDIT_TEXTURE, editMode == EditMode::AdvTexture, "Advanced texture edit mode (F12)", HotkeyAction::EditMode_AdvTexture, config.toolbarButtonsTextureEdit);
-	ImGui::SameLine();
 	toolBarToggleButton("sprite", ICON_EDIT_SPRITE, editMode == EditMode::Sprite, "Sprite edit mode", HotkeyAction::EditMode_Sprite, config.toolbarButtonsWallEdit);
 	ImGui::SameLine();
 	toolBarToggleButton("cinematic", ICON_EDIT_CINEMATIC, editMode == EditMode::Cinematic, "Cinematic Mode", HotkeyAction::EditMode_Cinematic, config.toolbarButtonsWallEdit);
@@ -80,12 +78,19 @@ void BrowEdit::toolbar()
 	toolBarToggleButton("watermode", ICON_VIEW_WATER_ON, editMode == EditMode::Water, "Water edit mode", HotkeyAction::EditMode_Water, config.toolbarButtonsWallEdit);
 	ImGui::SameLine();
 	toolBarToggleButton("skymapmode", ICON_VIEW_FOG_ON, editMode == EditMode::SkyMap, "SkyMap edit mode", HotkeyAction::EditMode_SkyMap, config.toolbarButtonsWallEdit);
+	ImGui::SameLine();
+	toolBarToggleButton("advtexture", ICON_EDIT_TEXTURE, editMode == EditMode::AdvTexture, "Advanced texture edit mode (F12)", HotkeyAction::EditMode_AdvTexture, config.toolbarButtonsTextureEdit);
 	ImGuiContext& g = *GImGui;
-	ImGui::SameLine(125 + 11 * (config.toolbarButtonSize + g.Style.ItemSpacing.x));
+	ImGui::SameLine(125 + 12 * (config.toolbarButtonSize + g.Style.ItemSpacing.x));
 
 	if (editMode == EditMode::Object)
 	{
 		toolBarToggleButton("showObjectWindow", windowData.objectWindowVisible ? ICON_OBJECTPICKER_OPEN : ICON_OBJECTPICKER_CLOSE, windowData.objectWindowVisible, "Toggle object window", HotkeyAction::ObjectEdit_ToggleObjectWindow, config.toolbarButtonsObjectEdit);
+		ImGui::SameLine();
+	}
+	if (editMode == EditMode::AdvTexture)
+	{
+		toolBarToggleButton("showLayerPicker", windowData.layerPickerVisible ? ICON_TEXTUREPICKER_OPEN : ICON_TEXTUREPICKER_CLOSE, &windowData.layerPickerVisible, "Toggle layer texture picker", config.toolbarButtonsTextureEdit);
 		ImGui::SameLine();
 	}
 	if (editMode == EditMode::Texture)

@@ -207,6 +207,7 @@ public:
 		std::function<void()> progressCancel;
 
 		bool textureManageWindowVisible = true; //TODO: load from config
+		bool layerPickerVisible = true;			// Advanced Texture: Layer texture picker
 		util::FileIO::Node* textureManageWindowSelectedTreeNode = nullptr;
 		std::map<std::string, gl::Texture*> textureManageWindowCache;
 
