@@ -130,6 +130,14 @@ namespace advtex
 			auto it = P.cells.find(k);
 			Masks b = it != P.cells.end() ? it->second.masks : Masks();
 			Masks a = b;
+			bool blank = true;
+			for (uint8_t v : rc.alpha) if (v > 4) { blank = false; break; }
+			if (blank)
+			{
+				if (!a.erase(rib)) continue;		// nothing to clear
+				before[k] = b; after[k] = a;
+				continue;
+			}
 			if (ground >= 0) a[ground].assign(MASK * MASK, 255);
 			std::vector<uint8_t> mk = rc.alpha;
 			mk.resize(MASK * MASK, 0);
@@ -171,6 +179,16 @@ namespace advtex
 			{
 				if (idx[j] < 0) continue;
 				if (lc.alpha[j].empty()) continue;
+				{
+					bool blank = true;
+					for (uint8_t v : lc.alpha[j]) if (v > 4) { blank = false; break; }
+					if (blank)
+					{
+						// nothing of this layer belongs in the cell any more: drop what was painted there before
+						if (a.erase(idx[j])) any = true;
+						continue;
+					}
+				}
 				std::vector<uint8_t> mk = lc.alpha[j];
 				mk.resize(MASK * MASK, 0);
 				if (specs[j].ribbon)

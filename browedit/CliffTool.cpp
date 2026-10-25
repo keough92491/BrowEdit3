@@ -432,7 +432,8 @@ namespace cliff
 				glm::vec2 centre = (cornerPos(gnd, t.x, t.y, 0) + cornerPos(gnd, t.x, t.y, 3)) * 0.5f;
 				// cheap cull: tile far from the band
 				float dc = dOf(centre);
-				if (std::fabs(dc) > w * 0.5f + span * 0 + 2.5f * (1.0f + 0.0f)) continue;
+				auto clearCell = [&]() { advtex::RibbonCell z; z.x = t.x; z.y = t.y; z.alpha.assign((size_t)M * M, 0); out.push_back(z); };		// drops an older ribbon that no longer belongs here
+				if (std::fabs(dc) > w * 0.5f + span * 0 + 2.5f * (1.0f + 0.0f)) { clearCell(); continue; }
 				// nearest contour point at the centre: tangent and arc length for u
 				int bc = -1, bi = 0; float best = 1e9f;
 				for (int ci = 0; ci < (int)polys.size(); ci++)
@@ -441,7 +442,7 @@ namespace cliff
 						float d2 = glm::dot(polys[ci].p[i] - centre, polys[ci].p[i] - centre);
 						if (d2 < best) { best = d2; bc = ci; bi = i; }
 					}
-				if (bc < 0) continue;
+				if (bc < 0) { clearCell(); continue; }
 				auto& pl = polys[bc];
 				int n = (int)pl.p.size();
 				glm::vec2 tg = pl.p[std::min(n - 1, bi + 2)] - pl.p[std::max(0, bi - 2)];
@@ -478,7 +479,7 @@ namespace cliff
 						rc.alpha[(size_t)j * M + i] = av;
 						any |= av > 4;
 					}
-				if (any) out.push_back(rc);
+				if (any) out.push_back(rc); else clearCell();
 			}
 			advtex::project(map, browEdit).cellPx = st.ribbonDetail;
 			if (auto act = advtex::makeRibbonAction(map, browEdit, st.ribbonTex, st.ribbonGround, out, "Cliff ribbon"))
@@ -725,10 +726,12 @@ namespace cliff
 							aE[o] = (uint8_t)std::lround(a * 255.0f); anyE |= aE[o] > 4;
 						}
 					}
-				if (anyF) lc.alpha[0] = aF;
-				if (anyR) lc.alpha[1] = aR;
-				if (anyE) { lc.alpha[2] = aE; lc.uv[2].assign(uv, uv + 8); }
-				if (anyF || anyR || anyE) out.push_back(lc);
+				// an all-zero mask clears what an earlier stroke left in that layer of the cell (so continuing a cave never leaves stale rock/edge on the new floor)
+				if (wantFloor) lc.alpha[0] = aF;
+				if (wantRock) lc.alpha[1] = aR;
+				if (wantEdge) { lc.alpha[2] = aE; lc.uv[2].assign(uv, uv + 8); }
+				(void)anyF; (void)anyR; (void)anyE;
+				out.push_back(lc);
 			}
 			advtex::project(map, browEdit).cellPx = st.ribbonDetail;
 			if (auto act = advtex::makeLayeredAction(map, browEdit, specs, out, "Cave textures")) ga->addAction(act);
