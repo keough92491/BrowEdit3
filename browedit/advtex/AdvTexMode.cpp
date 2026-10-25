@@ -6,6 +6,9 @@
 #include <browedit/Node.h>
 #include <browedit/actions/Action.h>
 #include <browedit/components/Gnd.h>
+#include <browedit/components/GndRenderer.h>
+#include <browedit/shaders/GndShader.h>
+#include <browedit/gl/Vertex.h>
 #include <browedit/gl/FBO.h>
 #include <browedit/gl/Texture.h>
 #include <browedit/math/Ray.h>
@@ -408,52 +411,81 @@ namespace advtex
 		}
 	}
 
+	// draws the unbuilt paint with the map's own ground shader, so lightmap shadows, light colours, lights, fog and tile colours apply like the final result
 	static void drawPreview(MapView* mv, Project& P, Gnd* gnd)
 	{
 		bool any = false;
 		for (auto& kv : P.cells) if (kv.second.dirty && kv.second.prevOk) { any = true; break; }
 		if (!any) return;
-		mv->simpleShader->use();
-		mv->simpleShader->setUniform(SimpleShader::Uniforms::projectionMatrix, mv->nodeRenderContext.projectionMatrix);
-		mv->simpleShader->setUniform(SimpleShader::Uniforms::viewMatrix, mv->nodeRenderContext.viewMatrix);
-		mv->simpleShader->setUniform(SimpleShader::Uniforms::modelMatrix, glm::mat4(1.0f));
-		mv->simpleShader->setUniform(SimpleShader::Uniforms::textureFac, 1.0f);
-		mv->simpleShader->setUniform(SimpleShader::Uniforms::lightMin, 1.0f);
-		mv->simpleShader->setUniform(SimpleShader::Uniforms::color, glm::vec4(1.0f));
+		auto gr = gnd->node ? gnd->node->getComponent<GndRenderer>() : nullptr;
+		if (!gr || !gr->gndShadow) return;
+		auto ctx = GndRenderer::GndRenderContext::getInstance();
+		auto shader = ctx->shader;
+		shader->use();
+		shader->setUniform(GndShader::Uniforms::ProjectionMatrix, mv->nodeRenderContext.projectionMatrix);
+		shader->setUniform(GndShader::Uniforms::ModelViewMatrix, ctx->viewMatrix);
+		shader->setUniform(GndShader::Uniforms::s_texture, 0);
+		shader->setUniform(GndShader::Uniforms::s_lighting, 1);
+		shader->setUniform(GndShader::Uniforms::shadowMapToggle, gr->viewLightmapShadow ? 0.0f : 1.0f);
+		shader->setUniform(GndShader::Uniforms::lightColorToggle, gr->viewLightmapColor ? 1.0f : 0.0f);
+		shader->setUniform(GndShader::Uniforms::colorToggle, gr->viewColors ? 0.0f : 1.0f);
+		shader->setUniform(GndShader::Uniforms::viewTextures, 1.0f);
+		glActiveTexture(GL_TEXTURE1);
+		gr->gndShadow->bind();
+		glActiveTexture(GL_TEXTURE0);
 		glBindBuffer(GL_ARRAY_BUFFER, 0);
-		glEnableVertexAttribArray(0); glEnableVertexAttribArray(1);
-		glDisableVertexAttribArray(2); glDisableVertexAttribArray(3); glDisableVertexAttribArray(4);
+		for (int i = 0; i < 5; i++) glEnableVertexAttribArray(i);
 		glEnable(GL_POLYGON_OFFSET_FILL);
 		glPolygonOffset(-2.0f, -2.0f);
+		const float lmsx = (float)gnd->lightmapWidth, lmsy = (float)gnd->lightmapHeight;
+		const int rowCount = std::max(1, gr->shadowmapSize / gnd->lightmapWidth);
+		auto tileColor = [&](int x, int y) -> glm::vec4 {
+			if (x < 0 || y < 0 || x >= gnd->width || y >= gnd->height) return glm::vec4(1.0f);
+			int t = gnd->cubes[x][y]->tileUp;
+			return t == -1 ? glm::vec4(0.0f) : glm::vec4(gnd->tiles[t]->color) / 255.0f;
+		};
 		for (auto& a : P.atlases)
 		{
 			if (a.retired || !a.prev) continue;
-			std::vector<float> v;
+			std::vector<VertexP3T2T2C4N3> v;
 			int block = a.cellPx + 2 * PAD, perRow = a.size / block;
-			for (int s = 0; s < (int)a.slots.size(); s++)
+			for (int sl = 0; sl < (int)a.slots.size(); sl++)
 			{
-				if (a.slots[s] < 0) continue;
-				auto it = P.cells.find(a.slots[s]);
+				if (a.slots[sl] < 0) continue;
+				auto it = P.cells.find(a.slots[sl]);
 				if (it == P.cells.end() || !it->second.dirty || !it->second.prevOk) continue;
 				int x = keyX(it->first), y = keyY(it->first);
 				if (x >= gnd->width || y >= gnd->height) continue;
 				auto cube = gnd->cubes[x][y];
-				float bx = (float)((s % perRow) * block + PAD), by = (float)((s / perRow) * block + PAD);
+				if (cube->tileUp < 0 || cube->tileUp >= (int)gnd->tiles.size()) continue;
+				auto tile = gnd->tiles[cube->tileUp];
+				float bx = (float)((sl % perRow) * block + PAD), by = (float)((sl / perRow) * block + PAD);
 				float u0 = bx / a.size, v0 = by / a.size, u1 = (bx + a.cellPx) / a.size, v1 = (by + a.cellPx) / a.size;
+				glm::vec2 lm1(0), lm2(0);
+				if (tile->lightmapIndex >= 0)
+				{
+					lm1 = glm::vec2((tile->lightmapIndex % rowCount) * (lmsx / gr->shadowmapSize) + 1.0f / gr->shadowmapSize, (tile->lightmapIndex / rowCount) * (lmsy / gr->shadowmapSize) + 1.0f / gr->shadowmapSize);
+					lm2 = lm1 + glm::vec2((lmsx - 2.0f) / gr->shadowmapSize, (lmsy - 2.0f) / gr->shadowmapSize);
+				}
 				float X = 10.0f * x, Z = 10.0f * gnd->height - 10.0f * y;
-				const float e = 0.05f;
-				auto push = [&](float px, float h, float pz, float u, float vv) { v.insert(v.end(), { px, -h + e, pz, u, vv }); };
-				// corners as the ground renderer builds them: v3 (x, z) v4 (x+1, z) v1 (x, z+1) v2 (x+1, z+1)
-				push(X, cube->h3, Z, u0, v0); push(X, cube->h1, Z + 10, u0, v1); push(X + 10, cube->h4, Z, u1, v0);
-				push(X + 10, cube->h4, Z, u1, v0); push(X, cube->h1, Z + 10, u0, v1); push(X + 10, cube->h2, Z + 10, u1, v1);
+				VertexP3T2T2C4N3 q1(glm::vec3(X, -cube->h3, Z), glm::vec2(u0, v0), glm::vec2(lm1.x, lm2.y), tileColor(x, y + 1), cube->normals[2]);
+				VertexP3T2T2C4N3 q2(glm::vec3(X + 10, -cube->h4, Z), glm::vec2(u1, v0), glm::vec2(lm2.x, lm2.y), tileColor(x + 1, y + 1), cube->normals[3]);
+				VertexP3T2T2C4N3 q3(glm::vec3(X, -cube->h1, Z + 10), glm::vec2(u0, v1), glm::vec2(lm1.x, lm1.y), glm::vec4(tile->color) / 255.0f, cube->normals[0]);
+				VertexP3T2T2C4N3 q4(glm::vec3(X + 10, -cube->h2, Z + 10), glm::vec2(u1, v1), glm::vec2(lm2.x, lm1.y), tileColor(x + 1, y), cube->normals[1]);
+				v.push_back(q4); v.push_back(q2); v.push_back(q1);
+				v.push_back(q4); v.push_back(q1); v.push_back(q3);
 			}
 			if (v.empty()) continue;
 			glActiveTexture(GL_TEXTURE0);
 			glBindTexture(GL_TEXTURE_2D, a.prev->id());
 			glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
-			glVertexAttribPointer(0, 3, GL_FLOAT, false, 5 * sizeof(float), &v[0]);
-			glVertexAttribPointer(1, 2, GL_FLOAT, false, 5 * sizeof(float), &v[3]);
-			glDrawArrays(GL_TRIANGLES, 0, (int)(v.size() / 5));
+			const char* base = (const char*)v.data();
+			glVertexAttribPointer(0, 3, GL_FLOAT, false, sizeof(VertexP3T2T2C4N3), base + 0 * sizeof(float));
+			glVertexAttribPointer(1, 2, GL_FLOAT, false, sizeof(VertexP3T2T2C4N3), base + 3 * sizeof(float));
+			glVertexAttribPointer(2, 2, GL_FLOAT, false, sizeof(VertexP3T2T2C4N3), base + 5 * sizeof(float));
+			glVertexAttribPointer(3, 4, GL_FLOAT, false, sizeof(VertexP3T2T2C4N3), base + 7 * sizeof(float));
+			glVertexAttribPointer(4, 3, GL_FLOAT, false, sizeof(VertexP3T2T2C4N3), base + 11 * sizeof(float));
+			glDrawArrays(GL_TRIANGLES, 0, (int)v.size());
 		}
 		glDisable(GL_POLYGON_OFFSET_FILL);
 	}
@@ -692,13 +724,14 @@ namespace advtex
 			{
 				auto& L = P.layers[P.selLayer];
 				bool ch = false;
-				ch |= ImGui::SliderFloat("Cells per repeat", &L.tiling, 0.5f, 16.0f);
+				ch |= ImGui::InputFloat("Cells per repeat", &L.tiling, 0.5f, 1.0f, "%.3f");
+				if (L.tiling < 0.1f) L.tiling = 0.1f;
 				const char* rots[] = { "0", "90", "180", "270" };
 				ch |= ImGui::Combo("Rotation", &L.rot, rots, 4);
 				ch |= ImGui::Checkbox("Flip H", &L.flipH); ImGui::SameLine();
 				ch |= ImGui::Checkbox("Flip V", &L.flipV);
-				ch |= ImGui::SliderFloat("Offset X", &L.offX, 0.0f, 1.0f);
-				ch |= ImGui::SliderFloat("Offset Y", &L.offY, 0.0f, 1.0f);
+				ch |= ImGui::InputFloat("Offset X", &L.offX, 0.05f, 0.25f, "%.3f");
+				ch |= ImGui::InputFloat("Offset Y", &L.offY, 0.05f, 0.25f, "%.3f");
 				if (ch) layerChanged(P, P.selLayer);
 			}
 
