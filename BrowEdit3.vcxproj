@@ -1,4 +1,4 @@
-<?xml version="1.0" encoding="utf-8"?>
+﻿<?xml version="1.0" encoding="utf-8"?>
 <Project DefaultTargets="Build" xmlns="http://schemas.microsoft.com/developer/msbuild/2003">
   <ItemGroup Label="ProjectConfigurations">
     <ProjectConfiguration Include="Debug|x64">
@@ -95,6 +95,7 @@
     <ClCompile Include="browedit\MapView.cpp" />
     <ClCompile Include="browedit\MapView.Gatmode.cpp" />
     <ClCompile Include="browedit\MapView.Heightmode.cpp" />
+    <ClCompile Include="browedit\CliffTool.cpp" />
     <ClCompile Include="browedit\MapView.Objectmode.cpp" />
     <ClCompile Include="browedit\MapView.Shadowmode.cpp" />
     <ClCompile Include="browedit\MapView.Texturemode.cpp" />
@@ -254,6 +255,7 @@
     <ClInclude Include="browedit\components\StrRenderer.h" />
     <ClInclude Include="browedit\components\SprRenderer.h" />
     <ClInclude Include="browedit\components\PortalRenderer.h" />
+    <ClInclude Include="browedit\CliffTool.h" />
     <ClInclude Include="browedit\components\FxRenderer.h" />
     <ClInclude Include="browedit\components\WaterRenderer.h" />
     <ClInclude Include="browedit\Config.h" />

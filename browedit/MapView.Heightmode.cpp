@@ -20,6 +20,7 @@
 #include <browedit/actions/CubeTileChangeAction.h>
 #include <browedit/actions/NewObjectAction.h>
 #include <browedit/actions/SelectAction.h>
+#include <browedit/CliffTool.h>
 #include <imgui.h>
 #include <imgui_internal.h>
 
@@ -259,7 +260,11 @@ void MapView::postRenderHeightMode(BrowEdit* browEdit)
 
 	}
 
-	if (browEdit->heightDoodle && hovered)
+	if (browEdit->heightDoodle && cliff::settings().active)
+	{
+		cliff::update(this, browEdit, map, gnd, gndRenderer, hovered ? mouse3D : glm::vec3(-1.0f));
+	}
+	else if (browEdit->heightDoodle && hovered)
 	{
 		static std::map<Gnd::Cube*, float[4]> originalHeights;
 		static std::vector<glm::ivec2> tilesProcessed;

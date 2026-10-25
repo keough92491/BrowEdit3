@@ -285,7 +285,11 @@ void BrowEdit::run()
 			showTextureManageWindow();
 		}
 		if (editMode == EditMode::Height)
+		{
 			showHeightWindow();
+			if (heightDoodle)
+				showTextureManageWindow();
+		}
 		if (editMode == EditMode::Gat)
 			showGatWindow();
 		if (editMode == EditMode::Wall)

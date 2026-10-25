@@ -1,0 +1,37 @@
+#pragma once
+#include <string>
+#include <vector>
+#include <glm/glm.hpp>
+
+class BrowEdit;
+class MapView;
+class Map;
+class Gnd;
+class GndRenderer;
+
+// Cliff brush for the Height edit mode (doodle): circular brush that raises / lowers / sets terrain with a natural, noisy edge,
+// optionally as a sheer cliff with generated walls and a texture set for the cliff face and the slope.
+namespace cliff
+{
+	struct Settings
+	{
+		bool active = false;		// cliff brush instead of the height doodle brush
+		int mode = 0;			// 0 raise, 1 lower, 2 set to height
+		float radius = 5.0f;		// tiles
+		float height = 20.0f;
+		int profile = 0;		// 0 sloped, 1 sheer (walls)
+		float edgeWidth = 2.0f;	// tiles, sloped profile
+		float roughness = 0.35f;	// how much noise bends the edge
+		float noiseScale = 0.35f;	// noise frequency (per tile)
+		int terraces = 1;
+		int seed = 1;
+		bool buildWalls = true;
+		bool randomSlice = true;
+		bool texSlope = true;
+		std::vector<std::string> wallTextures;
+		std::vector<std::string> slopeTextures;
+	};
+	Settings& settings();
+	void showOptions(BrowEdit* browEdit, MapView* mapView);
+	void update(MapView* mv, BrowEdit* browEdit, Map* map, Gnd* gnd, GndRenderer* gr, const glm::vec3& mouse3D);
+}

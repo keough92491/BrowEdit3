@@ -14,6 +14,7 @@
 #include <browedit/actions/CubeHeightChangeAction.h>
 #include <browedit/gl/Texture.h>
 #include <browedit/HotkeyRegistry.h>
+#include <browedit/CliffTool.h>
 #include <imgui.h>
 #include <imgui_internal.h>
 #include <GLFW/glfw3.h>
@@ -22,6 +23,7 @@ GLint oldTextureId;
 
 void BrowEdit::showHeightWindow()
 {
+	static int cliffBrushInt = 0;
 
 	ImGui::Begin("Height Edit");
 	if (!activeMapView)
@@ -174,6 +176,14 @@ void BrowEdit::showHeightWindow()
 	}
 	else //heightDoodle
 	{
+		ImGui::RadioButton("Height brush", &cliffBrushInt, 0); ImGui::SameLine();
+		ImGui::RadioButton("Cliff brush", &cliffBrushInt, 1);
+		cliff::settings().active = cliffBrushInt == 1;
+		if (cliff::settings().active)
+		{
+			cliff::showOptions(this, activeMapView);
+		}
+		else
 		if (ImGui::TreeNodeEx("Brush Options", ImGuiTreeNodeFlags_DefaultOpen))
 		{
 			ImGui::DragInt("Brush Size", &windowData.heightEdit.doodleSize, 1.0f, 0, 10);
