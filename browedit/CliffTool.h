@@ -16,6 +16,7 @@ namespace cliff
 	struct Settings
 	{
 		bool active = false;
+		bool stackLevel = false;		// build relative to the ground under the brush instead of merging with an earlier cliff
 		bool continueCliff = true;		// a stroke that starts on an existing cliff keeps that cliff's height
 		// cave brush: carve a walkable floor into a rock mass
 		bool cave = false;

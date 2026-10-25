@@ -229,7 +229,7 @@ namespace cliff
 		float fieldAt(const Settings& st, const glm::vec2& p)
 		{
 			float m = newField(st, p);
-			if (curStore) m = std::max(m, -oldCaveDist(p));		// what earlier strokes made stays part of the shape
+			if (curStore && !(!st.cave && st.stackLevel)) m = std::max(m, -oldCaveDist(p));		// what earlier strokes made stays part of the shape
 			return m;
 		}
 
@@ -432,7 +432,8 @@ namespace cliff
 				glm::vec2 centre = (cornerPos(gnd, t.x, t.y, 0) + cornerPos(gnd, t.x, t.y, 3)) * 0.5f;
 				// cheap cull: tile far from the band
 				float dc = dOf(centre);
-				auto clearCell = [&]() { advtex::RibbonCell z; z.x = t.x; z.y = t.y; z.alpha.assign((size_t)M * M, 0); out.push_back(z); };		// drops an older ribbon that no longer belongs here
+				const bool keepOld = !st.cave && st.stackLevel;
+				auto clearCell = [&]() { if (keepOld) return; advtex::RibbonCell z; z.x = t.x; z.y = t.y; z.alpha.assign((size_t)M * M, 0); out.push_back(z); };		// drops an older ribbon that no longer belongs here
 				if (std::fabs(dc) > w * 0.5f + span * 0 + 2.5f * (1.0f + 0.0f)) { clearCell(); continue; }
 				// nearest contour point at the centre: tangent and arc length for u
 				int bc = -1, bi = 0; float best = 1e9f;
@@ -585,6 +586,7 @@ namespace cliff
 		void stampCliff(Gnd* gnd, GndRenderer* gr, const glm::vec2& c)
 		{
 			auto& s = settings();
+			const bool stack = s.stackLevel;
 			float reach = s.radius * (1.0f + s.roughness * 0.5f) + 2.0f;
 			int x0 = std::max(0, (int)std::floor(c.x - reach)), x1 = std::min(gnd->width - 1, (int)std::ceil(c.x + reach));
 			int y0 = std::max(0, (int)std::floor(gnd->height - c.y - reach)), y1 = std::min(gnd->height - 1, (int)std::ceil(gnd->height - c.y + reach));
@@ -594,8 +596,8 @@ namespace cliff
 					auto cube = gnd->cubes[x][y];
 					glm::vec2 centre((float)x + 0.5f, (float)(gnd->height - y) + 0.5f);
 					float Fn[4], Fo[4];
-					for (int i = 0; i < 4; i++) { glm::vec2 cp = cornerPos(gnd, x, y, i); Fn[i] = newField(s, cp); Fo[i] = -oldCaveDist(cp); }
-					float Fnc = newField(s, centre), Foc = -oldCaveDist(centre);
+					for (int i = 0; i < 4; i++) { glm::vec2 cp = cornerPos(gnd, x, y, i); Fn[i] = newField(s, cp); Fo[i] = stack ? -100.0f : -oldCaveDist(cp); }
+					float Fnc = newField(s, centre), Foc = stack ? -100.0f : -oldCaveDist(centre);
 					float wN[4], wO[4], wUn[4]; bool any = false;
 					for (int i = 0; i < 4; i++)
 					{
@@ -613,18 +615,20 @@ namespace cliff
 					{
 						int ck = (y * gnd->width + x) * 4 + i;
 						auto it = curStore->cor.find(ck);
-						bool has = it != curStore->cor.end();
+						bool has = !stack && it != curStore->cor.end();
 						float o = origHeights[cube][i];
 						float base = has ? it->second.base : o;
 						float deltaNew = s.mode == 0 ? -s.height : s.mode == 1 ? s.height : (s.height - base);
 						if (s.mode < 2 && strokeDeltaSet) deltaNew = strokeDelta;
-						float delta = has ? (wN[i] > wO[i] + 1e-4f ? deltaNew : it->second.level) : deltaNew;
+						float delta = deltaNew;
+						if (has && wO[i] > 0.0f)
+							delta = wN[i] > 0.0f ? (it->second.level * wO[i] + deltaNew * wN[i]) / (wO[i] + wN[i]) : it->second.level;		// one smooth height where two strokes meet
 						cube->heights[i] = base + delta * wUn[i];
 						weights[cube][i] = std::max(weights[cube][i], wUn[i]);
+						if (stack) continue;
 						if (!corBefore.count(ck)) corBefore[ck] = { has, has ? it->second : CaveEnt() };
 						CaveEnt ce; ce.d = 0; ce.base = base; ce.level = delta;
 						if (wN[i] > 0 || has) curStore->cor[ck] = ce;
-						// lattice field (shared by the four cubes around the point)
 						glm::vec2 cp = cornerPos(gnd, x, y, i);
 						int key = latKey((int)std::lround(cp.x), (int)std::lround(cp.y), curStore->w);
 						auto lit = curStore->pts.find(key);
@@ -1120,7 +1124,7 @@ namespace cliff
 				lastCentre = glm::vec2(-1000.0f);
 				centres.clear();
 				caveBefore.clear(); corBefore.clear(); strokeDeltaSet = false;
-				if (!s.cave && s.continueCliff && curStore && s.mode < 2 && -oldCaveDist(c) > 0.0f)
+				if (!s.cave && !s.stackLevel && s.continueCliff && curStore && s.mode < 2 && -oldCaveDist(c) > 0.0f)
 				{
 					// starting on a cliff that already exists: keep its height
 					int cx = std::clamp((int)std::floor(c.x), 0, gnd->width - 1), cy = std::clamp(gnd->height - 1 - (int)std::floor(c.y), 0, gnd->height - 1);
@@ -1264,7 +1268,9 @@ namespace cliff
 		ImGui::RadioButton("Set height", &s.mode, 2);
 		ImGui::SliderFloat("Radius (tiles)", &s.radius, 0.5f, 40.0f);
 		ImGui::InputFloat(s.mode == 2 ? "Target height" : "Cliff height", &s.height, 1.0f, 5.0f, "%.2f");
-		if (s.mode < 2) ImGui::Checkbox("Continue the height of a cliff I start on", &s.continueCliff);
+		ImGui::Checkbox("New level on top of what is there (1st, 2nd, 3rd cliff)", &s.stackLevel);
+		if (ImGui::IsItemHovered()) ImGui::SetTooltip("On: this cliff is built relative to the ground under it, so a 2nd cliff on the 1st goes above it (Raise) or below it (Lower).\nOff: strokes that touch an existing cliff merge with it and keep its height.");
+		if (!s.stackLevel && s.mode < 2) ImGui::Checkbox("Continue the height of a cliff I start on", &s.continueCliff);
 		ImGui::Separator();
 		ImGui::RadioButton("Sloped cliff", &s.profile, 0); ImGui::SameLine();
 		ImGui::RadioButton("Sheer cliff (walls)", &s.profile, 1);
