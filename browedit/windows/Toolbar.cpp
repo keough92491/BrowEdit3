@@ -44,6 +44,8 @@ void BrowEdit::toolbar()
 		ImGui::Text("Shadow");
 	else if (editMode == EditMode::Sprite)
 		ImGui::Text("Sprite");
+	else if (editMode == EditMode::AdvTexture)
+		ImGui::Text("Adv. Texture");
 	else if (editMode == EditMode::Cinematic)
 		ImGui::Text("Cinematic");
 	else if (editMode == EditMode::Water)
@@ -68,6 +70,8 @@ void BrowEdit::toolbar()
 	toolBarToggleButton("color", ICON_EDIT_COLOR, editMode == EditMode::Color, "Color edit mode", HotkeyAction::EditMode_Color, config.toolbarButtonsWallEdit);
 	ImGui::SameLine();
 	toolBarToggleButton("shadow", ICON_EDIT_SHADOW, editMode == EditMode::Shadow, "Shadow edit mode", HotkeyAction::EditMode_Shadow, config.toolbarButtonsWallEdit);
+	ImGui::SameLine();
+	toolBarToggleButton("advtexture", ICON_EDIT_TEXTURE, editMode == EditMode::AdvTexture, "Advanced texture edit mode (F12)", HotkeyAction::EditMode_AdvTexture, config.toolbarButtonsTextureEdit);
 	ImGui::SameLine();
 	toolBarToggleButton("sprite", ICON_EDIT_SPRITE, editMode == EditMode::Sprite, "Sprite edit mode", HotkeyAction::EditMode_Sprite, config.toolbarButtonsWallEdit);
 	ImGui::SameLine();

@@ -68,6 +68,8 @@
     <ClCompile Include="browedit\sprite\RoFormats.cpp" />
     <ClCompile Include="browedit\sprite\Compose.cpp" />
     <ClCompile Include="browedit\sprite\Text.cpp" />
+    <ClCompile Include="browedit\advtex\AdvTexBake.cpp" />
+    <ClCompile Include="browedit\advtex\AdvTexMode.cpp" />
     <ClCompile Include="browedit\sprite\Db.cpp" />
     <ClCompile Include="browedit\sprite\Character.cpp" />
     <ClCompile Include="browedit\sprite\SpriteSystem.cpp" />

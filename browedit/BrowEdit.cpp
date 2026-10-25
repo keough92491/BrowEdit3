@@ -1,4 +1,5 @@
 #include <browedit/sprite/SpriteSystem.h>
+#include <browedit/advtex/AdvTex.h>
 #include "BrowEdit.h"
 #include "Version.h"
 #include <glad/gl.h>
@@ -291,6 +292,8 @@ void BrowEdit::run()
 			showSkyMapEditWindow();
 		if (editMode == EditMode::Sprite)
 			sprite::System::instance().showWindows(this);
+		if (editMode == EditMode::AdvTexture)
+			advtex::showWindow(this);
 
 		if (windowData.hotkeyEditWindowVisible)
 			showHotkeyEditorWindow();
@@ -616,6 +619,8 @@ void BrowEdit::showMapWindow(MapView& mapView, float deltaTime)
 					mapView.postRenderCinematicMode(this);
 				else if (editMode == EditMode::Water)
 					mapView.postRenderWaterMode(this);
+				else if (editMode == EditMode::AdvTexture)
+					advtex::postRender(&mapView, this);
 				else if (editMode == EditMode::Sprite)
 					sprite::System::instance().postRender(&mapView, this);
 			}
@@ -736,6 +741,7 @@ void BrowEdit::saveMap(Map* map)
 		fixBackup(skyMapName, backupSkyMapName);
 	}
 
+	advtex::onSave(map, this);	// bake pending Advanced Texture paint and write its sidecar before the GND is saved
 	map->rootNode->getComponent<Rsw>()->save(rswName, this);
 	map->rootNode->getComponent<Gnd>()->save(gndName, map->rootNode->getComponent<Rsw>());
 	map->rootNode->getComponent<Gat>()->save(gatName);

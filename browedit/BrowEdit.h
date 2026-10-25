@@ -229,6 +229,7 @@ public:
 		Cinematic,
 		Water,
 		SkyMap,
+		AdvTexture,
 	} editMode = EditMode::Gat;
 	
 	enum class SelectTool

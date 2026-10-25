@@ -55,7 +55,7 @@ namespace gl
 	{
 		std::string f = fileName;
 		for (auto& ch : f) ch = (char)tolower((unsigned char)ch);
-		return f.find("prt_nov") != std::string::npos;
+		return f.find("prt_nov") != std::string::npos || (f.find("_at_") != std::string::npos && f.size() > 4 && f.substr(f.size() - 4) == ".bmp");	// Advanced Texture atlases too
 	}
 
 	void Texture::reload()
