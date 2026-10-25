@@ -11,6 +11,7 @@
 #include <browedit/util/Util.h>
 #include <stb/stb_image.h>
 #include <json.hpp>
+#include <imgui.h>
 #include <algorithm>
 #include <cmath>
 #include <cstring>
@@ -24,6 +25,7 @@ namespace advtex
 	// ------------------------------------------------------------------ helpers
 	static std::map<Map*, Project> projects;
 	static std::map<std::string, Img> imgCache;
+	static Map* askMap = nullptr;			// map waiting for the answer of the save prompt
 
 	bool isEmptyCell(const Cell& c)
 	{
@@ -558,7 +560,7 @@ namespace advtex
 		{
 			auto j = nlohmann::json::parse(i);
 			P.folder = j.value("folder", P.folder); P.cellPx = j.value("cellPx", 30); P.atlasSize = j.value("atlasSize", 512);
-			P.nextAtlasId = j.value("nextAtlasId", 1); P.autoBake = j.value("autoBake", true);
+			P.nextAtlasId = j.value("nextAtlasId", 1); P.autoBake = j.value("autoBake", false);
 			for (auto& l : j["layers"])
 			{
 				PaintLayer pl; pl.tex = util::utf8_to_iso_8859_1(l.value("tex", std::string())); pl.tiling = l.value("tiling", 2.0f);
@@ -652,20 +654,59 @@ namespace advtex
 		projects.erase(it);
 	}
 
-	void onSave(Map* map, BrowEdit* be)
+	bool hasUnbuilt(Map* map)
 	{
 		auto it = projects.find(map);
-		if (it == projects.end()) return;
+		if (it == projects.end()) return false;
+		if (it->second.pending) return true;
+		for (auto& kv : it->second.cells) if (kv.second.dirty) return true;
+		return false;
+	}
+
+	bool onSave(Map* map, BrowEdit* be)
+	{
+		auto it = projects.find(map);
+		if (it == projects.end()) return true;
 		Project& P = it->second;
-		bool dirty = P.pending;
-		for (auto& kv : P.cells) if (kv.second.dirty) dirty = true;
-		if (dirty)
+		if (hasUnbuilt(map))
 		{
-			std::string msg;
-			bake(map, be, P, false, msg);
-			P.status = msg;
-			std::cout << "AdvTex: " << msg << std::endl;
+			if (P.saveChoice == 0) { askMap = map; return false; }
+			if (P.saveChoice == 1)
+			{
+				std::string msg;
+				bool ok = bake(map, be, P, false, msg);
+				P.status = msg;
+				std::cout << "AdvTex: " << msg << std::endl;
+				if (!ok) { P.saveChoice = 0; askMap = nullptr; return false; }	// nothing was changed; the user can fix the problem and save again
+			}
+			else
+				std::cout << "AdvTex: saved as draft, the baked textures were not rebuilt" << std::endl;
 		}
+		P.saveChoice = 0;
 		saveProject(map, be, P);
+		return true;
+	}
+
+	void showSavePrompt(BrowEdit* be)
+	{
+		if (askMap && !projects.count(askMap)) askMap = nullptr;
+		if (askMap) ImGui::OpenPopup("Advanced Texture: build before saving?");
+		if (!ImGui::BeginPopupModal("Advanced Texture: build before saving?", 0, ImGuiWindowFlags_AlwaysAutoResize | ImGuiWindowFlags_NoDocking)) return;
+		Map* map = askMap;
+		if (!map) { ImGui::CloseCurrentPopup(); ImGui::EndPopup(); return; }
+		Project& P = projects[map];
+		int cells = 0; for (auto& kv : P.cells) if (kv.second.dirty) cells++;
+		ImGui::Text("%d painted cell(s) have not been built into texture files yet.", cells);
+		ImGui::Text("Build the baked textures now? Finished textures are written to data\\texture\\%s.", P.folder.c_str());
+		ImGui::Spacing();
+		ImGui::TextWrapped("Save as draft keeps the paint in the map's .browtex.json so you can keep editing; the GND and the texture files stay as they were.");
+		ImGui::Spacing();
+		auto go = [&](int choice) { P.saveChoice = choice; askMap = nullptr; ImGui::CloseCurrentPopup(); be->saveMap(map); };
+		if (ImGui::Button("Build and save")) go(1);
+		ImGui::SameLine();
+		if (ImGui::Button("Save as draft")) go(2);
+		ImGui::SameLine();
+		if (ImGui::Button("Cancel")) { askMap = nullptr; ImGui::CloseCurrentPopup(); }
+		ImGui::EndPopup();
 	}
 }

@@ -67,10 +67,11 @@ namespace advtex
 		std::string folder = "advtex";	// below data\texture\, ASCII
 		int cellPx = 30;				// 14 / 30 / 62
 		int atlasSize = 512;			// 256 / 512 (8 bit BMP, must stay below 1 MB)
-		bool autoBake = true;
+		bool autoBake = false;			// off: paint stays a draft preview until 'Build' / save
 		bool loaded = false, pending = false;
 		std::string path, status;
 		int selLayer = 0;
+		int saveChoice = 0;				// answer to the save prompt: 0 ask, 1 build, 2 keep as draft
 		std::set<int> touched;			// cells whose preview has to be re-rendered
 		double lastEdit = 0;
 	};
@@ -87,7 +88,10 @@ namespace advtex
 	std::vector<std::string> unusedAtlases(Map* map, Project& P);
 	int deleteUnused(Map* map, BrowEdit* be, Project& P);
 	// bake pending changes and write the sidecar (called by the map save)
-	void onSave(Map* map, BrowEdit* be);
+	// returns false when it has to ask the user first (the save is repeated after the answer)
+	bool onSave(Map* map, BrowEdit* be);
+	bool hasUnbuilt(Map* map);
+	void showSavePrompt(BrowEdit* be);
 	void forget(Map* map);
 	Project& project(Map* map, BrowEdit* be);
 

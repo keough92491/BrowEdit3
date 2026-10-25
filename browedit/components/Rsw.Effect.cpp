@@ -529,7 +529,7 @@ void EvilsPawEffect::buildImGuiMulti(BrowEdit* browEdit, const std::vector<Node*
 }
 
 // ---- effect preview: render the parts of normal client effect ids (data/effectparts.json, generated from EffectTable.json) ----
-void attachEffectPreview(Node* node)
+static std::map<int, nlohmann::json>& effectTable()
 {
 	static std::map<int, nlohmann::json> table;
 	static bool loaded = false;
@@ -544,6 +544,75 @@ void attachEffectPreview(Node* node)
 		}
 		catch (...) { std::cerr << "effectparts.json not loaded" << std::endl; }
 	}
+	return table;
+}
+
+// Files a client effect id needs (for the map export): (path, type) pairs below data\, only files that exist
+void collectEffectAssets(int id, std::vector<std::pair<std::string, std::string>>& out)
+{
+	auto exists = [](const std::string& f) { return util::FileIO::exists(f); };
+	auto add = [&](const std::string& path, const char* type) { if (exists(path)) out.emplace_back(path, type); };
+	auto slashes = [](std::string f) { for (auto& c : f) if (c == '/') c = '\\'; return f; };
+	if (id == 44) add("data\\texture\\effect\\smoke.tga", "effectTexture");
+	auto& table = effectTable();
+	auto it = table.find(id);
+	if (it == table.end())
+		return;
+	for (auto& part : it->second)
+	{
+		std::string type = part.value("type", "");
+		auto str = [&](const char* k) { return part.contains(k) && part[k].is_string() ? part[k].get<std::string>() : std::string(); };
+		std::string file = str("file");
+		if (!str("wav").empty())
+		{
+			std::string w = slashes(str("wav"));
+			for (const char* ext : { "", ".wav" })
+				if (exists("data\\wav\\" + w + ext)) { out.emplace_back("data\\wav\\" + w + ext, "sound"); break; }
+		}
+		if (type == "STR")
+		{
+			int lo = 1, hi = 1;
+			if (part.contains("rand") && part["rand"].is_array() && part["rand"].size() > 0 && part["rand"][0].is_number())
+			{
+				lo = hi = part["rand"][0].get<int>();
+				if (part["rand"].size() > 1 && part["rand"][1].is_number()) hi = std::min(part["rand"][1].get<int>(), lo + 20);
+			}
+			for (int r = lo; r <= hi; r++)
+			{
+				std::string f = file;
+				for (size_t p; (p = f.find("%d")) != std::string::npos;) f.replace(p, 2, std::to_string(r));
+				f = slashes(f);
+				std::string cands[2] = { f, f.rfind("effect\\", 0) == 0 ? f.substr(7) : f };
+				for (auto& c : cands)
+					if (exists("data\\texture\\effect\\" + c + ".str")) { out.emplace_back("data\\texture\\effect\\" + c + ".str", "str"); break; }
+			}
+		}
+		else if (type == "SPR" || (type == "3D" && file.empty() && !str("spriteName").empty()))
+		{
+			std::string name = util::utf8_to_iso_8859_1(type == "SPR" ? file : str("spriteName"));
+			std::string base = "data\\sprite\\\xC0\xCC\xC6\xD1\xC6\xAE\\" + name;
+			add(base + ".spr", "sprite");
+			add(base + ".act", "sprite");
+		}
+		else if (type == "2D" || type == "3D" || type == "CYLINDER")
+		{
+			std::string name = slashes(type == "CYLINDER" ? str("textureName") : file);
+			std::vector<std::string> bases = { name };
+			if (name.rfind("effect\\", 0) == 0) bases.push_back(name.substr(7));
+			bool done = false;
+			for (auto& b : bases)
+				for (const char* ext : { "", ".tga", ".bmp", ".png", ".jpg" })
+				{
+					std::string path = "data\\texture\\effect\\" + b + ext;
+					if (!done && !name.empty() && exists(path)) { out.emplace_back(path, "effectTexture"); done = true; }
+				}
+		}
+	}
+}
+
+void attachEffectPreview(Node* node)
+{
+	auto& table = effectTable();
 	auto e = node->getComponent<RswEffect>();
 	if (!e || node->getComponent<StrEffect>() || node->getComponent<SprEffect>() || node->getComponent<PortalEffect>() || node->getComponent<FxEffect>() || node->getComponent<LubEffect>() || node->getComponent<LubWindEffect>() || node->getComponent<EvilsPawEffect>())
 		return;

@@ -251,6 +251,7 @@ void BrowEdit::run()
 
 		openWindow();
 		showExportWindow();
+		advtex::showSavePrompt(this);
 		if (windowData.undoVisible)
 			showUndoWindow();
 		if (windowData.objectWindowVisible && editMode == EditMode::Object) {
@@ -732,6 +733,9 @@ void BrowEdit::saveMap(Map* map)
 	}
 
 
+	if (!advtex::onSave(map, this))	// asks "build the baked textures?" first; the save is repeated with the answer
+		return;
+
 	if (config.backup)
 	{
 		fixBackup(rswName, backupRswName);
@@ -741,7 +745,6 @@ void BrowEdit::saveMap(Map* map)
 		fixBackup(skyMapName, backupSkyMapName);
 	}
 
-	advtex::onSave(map, this);	// bake pending Advanced Texture paint and write its sidecar before the GND is saved
 	map->rootNode->getComponent<Rsw>()->save(rswName, this);
 	map->rootNode->getComponent<Gnd>()->save(gndName, map->rootNode->getComponent<Rsw>());
 	map->rootNode->getComponent<Gat>()->save(gatName);

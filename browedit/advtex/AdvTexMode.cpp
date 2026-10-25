@@ -270,8 +270,21 @@ namespace advtex
 
 		if (pickNow)
 		{
-			std::string f = baseFile(gnd, P, curCell.x, curCell.y);
-			if (!f.empty()) { P.selLayer = layerForFile(P, f); statusLine = "Picked " + f; }
+			bool picked = false;
+			auto cit = P.cells.find(key(curCell.x, curCell.y));
+			if (cit != P.cells.end())
+			{
+				int i = std::clamp((int)floorf((hit.x - 10.0f * curCell.x) / 10.0f * MASK), 0, MASK - 1);
+				int j = std::clamp((int)floorf((hit.z - 10.0f * (gnd->height - curCell.y)) / 10.0f * MASK), 0, MASK - 1);
+				for (auto it = cit->second.masks.rbegin(); it != cit->second.masks.rend() && !picked; ++it)
+					if (it->first >= 0 && it->first < (int)P.layers.size() && it->second.size() == (size_t)MASK * MASK && it->second[j * MASK + i] >= 64)
+					{ P.selLayer = it->first; picked = true; statusLine = "Picked layer " + P.layers[it->first].tex; }
+			}
+			if (!picked)
+			{
+				std::string f = baseFile(gnd, P, curCell.x, curCell.y);
+				if (!f.empty()) { P.selLayer = layerForFile(P, f); statusLine = "Picked " + f; }
+			}
 		}
 		else if (!stroking && !rectActive && mv->hovered && ok && ImGui::IsMouseClicked(0) && !wantInput && !io.KeyAlt && layerOk)
 		{
@@ -631,16 +644,16 @@ namespace advtex
 		ImGui::SetNextWindowSize(ImVec2(380, 640), ImGuiCond_FirstUseEver);
 		if (ImGui::Begin("Advanced Texture"))
 		{
-			ImGui::TextWrapped("Paint is non-destructive and is baked into %s_at_NNNN.bmp files that the GND uses like any other texture. Left mouse paints, Ctrl + left mouse erases, Alt + left mouse picks a texture from the map, Shift turns grid snapping off.", mapBase(map).c_str());
+			ImGui::TextWrapped("Paint is non-destructive and is built into %s_at_NNNN.bmp files that the GND uses like any other texture. Painting is a live draft preview; the texture files are only created when you press Build (or answer yes when saving). Left mouse paints, Ctrl + left mouse erases, Alt + left mouse is the dropper, Shift turns grid snapping off.", mapBase(map).c_str());
 			ImGui::Separator();
 			ImGui::Text("Tool");
-			const char* toolNames[] = { "Brush", "Rectangle", "Fill area", "Fill all", "Pick" };
+			const char* toolNames[] = { "Brush", "Rectangle", "Fill area", "Fill all", "Dropper" };
 			for (int i = 0; i < 5; i++)
 			{
 				if (i) ImGui::SameLine();
 				if (ImGui::RadioButton(toolNames[i], tool == i)) tool = i;
 			}
-			ImGui::TextDisabled(tool == ToolBrush ? "Paint with the brush below." : tool == ToolRect ? "Drag a rectangle of cells." : tool == ToolFill ? "Click: paints all connected cells that share the clicked cell's texture." : tool == ToolFillAll ? "Click: paints every cell on the map with the clicked cell's texture." : "Click a cell to use its texture as a layer.");
+			ImGui::TextDisabled(tool == ToolBrush ? "Paint with the brush below." : tool == ToolRect ? "Drag a rectangle of cells." : tool == ToolFill ? "Click: paints all connected cells that share the clicked cell's texture." : tool == ToolFillAll ? "Click: paints every cell on the map with the clicked cell's texture." : "Click: picks the layer painted at that spot, or the cell's ground texture as a new layer.");
 
 			ImGui::Separator();
 			ImGui::Text("Brush");
@@ -698,15 +711,15 @@ namespace advtex
 			const char* as[] = { "256 x 256", "512 x 512" };
 			int ai = P.atlasSize == 256 ? 0 : 1;
 			if (ImGui::Combo("Atlas size", &ai, as, 2)) P.atlasSize = ai == 0 ? 256 : 512;
-			ImGui::Checkbox("Bake automatically when painting stops", &P.autoBake);
+			ImGui::Checkbox("Build automatically when painting stops (writes the files)", &P.autoBake);
 			ImGui::TextDisabled("Changing folder or resolution takes effect with 'Rebuild all'.");
 
 			int dirtyCells = 0, painted = 0;
 			for (auto& kv : P.cells) { if (kv.second.dirty) dirtyCells++; if (!isEmptyCell(kv.second)) painted++; }
 			int liveAtlases = 0; for (auto& a : P.atlases) if (!a.retired) liveAtlases++;
-			ImGui::Text("%d painted cells, %d waiting for bake, %d texture file(s)", painted, dirtyCells, liveAtlases);
+			ImGui::Text("%d painted cells, %d draft (not built), %d texture file(s)", painted, dirtyCells, liveAtlases);
 
-			if (ImGui::Button("Bake changed textures")) { std::string msg; bake(map, be, P, false, msg); statusLine = msg; }
+			if (ImGui::Button("Build textures")) { std::string msg; bake(map, be, P, false, msg); statusLine = msg; }
 			ImGui::SameLine();
 			if (ImGui::Button("Rebuild all")) ImGui::OpenPopup("Rebuild?");
 			if (ImGui::BeginPopup("Rebuild?"))
