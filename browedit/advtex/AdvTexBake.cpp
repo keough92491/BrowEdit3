@@ -30,8 +30,8 @@ namespace advtex
 	bool isEmptyCell(const Cell& c)
 	{
 		for (auto& m : c.masks)
-			for (auto v : m.second)
-				if (v) return false;
+			for (size_t i = 0; i < m.second.size() && i < (size_t)MASK * MASK; i++)
+				if (m.second[i]) return false;
 		return true;
 	}
 
@@ -142,6 +142,16 @@ namespace advtex
 					float a = sampleMask(*l.mask, s, t);
 					if (a <= 0.0f) continue;
 					float oc[3];
+					if (l.pl->ribbon && l.mask->size() >= (size_t)MASK * MASK + 32)
+					{
+						float f[8]; std::memcpy(f, l.mask->data() + MASK * MASK, 32);
+						auto mixc = [&](int k0, int k1, int k2, int k3, int comp) { return (1 - t) * ((1 - s) * f[2 * k2 + comp] + s * f[2 * k3 + comp]) + t * ((1 - s) * f[2 * k0 + comp] + s * f[2 * k1 + comp]); };
+						float ru = mixc(0, 1, 2, 3, 0), rv = mixc(0, 1, 2, 3, 1);
+						rv = std::clamp(rv, 0.5f / l.img->h, 1.0f - 0.5f / l.img->h);
+						sampleImg(*l.img, ru, rv, true, oc);
+						for (int q = 0; q < 3; q++) col[q] = col[q] * (1 - a) + oc[q] * a;
+						continue;
+					}
 					float tl = std::max(0.1f, l.pl->tiling), u = wx / (10.0f * tl), v = wz / (10.0f * tl);
 					if (l.pl->flipH) u = -u;
 					if (l.pl->flipV) v = -v;
@@ -538,7 +548,7 @@ namespace advtex
 		}
 		std::vector<uint8_t> m;
 		for (size_t i = 0; i + 1 < raw.size(); i += 2) m.insert(m.end(), (uint8_t)raw[i], (uint8_t)raw[i + 1]);
-		m.resize(MASK * MASK, 0);
+		m.resize(m.size() > (size_t)MASK * MASK ? (size_t)MASK * MASK + 32 : (size_t)MASK * MASK, 0);
 		return m;
 	}
 
@@ -564,7 +574,7 @@ namespace advtex
 			for (auto& l : j["layers"])
 			{
 				PaintLayer pl; pl.tex = util::utf8_to_iso_8859_1(l.value("tex", std::string())); pl.tiling = l.value("tiling", 2.0f);
-				pl.rot = l.value("rot", 0); pl.flipH = l.value("flipH", false); pl.flipV = l.value("flipV", false); pl.offX = l.value("offX", 0.0f); pl.offY = l.value("offY", 0.0f);
+				pl.rot = l.value("rot", 0); pl.flipH = l.value("flipH", false); pl.flipV = l.value("flipV", false); pl.offX = l.value("offX", 0.0f); pl.offY = l.value("offY", 0.0f); pl.ribbon = l.value("ribbon", false);
 				P.layers.push_back(pl);
 			}
 			for (auto& a : j["atlases"])
@@ -607,7 +617,7 @@ namespace advtex
 		nlohmann::json j;
 		j["version"] = 1; j["folder"] = P.folder; j["cellPx"] = P.cellPx; j["atlasSize"] = P.atlasSize; j["nextAtlasId"] = P.nextAtlasId; j["autoBake"] = P.autoBake;
 		j["layers"] = nlohmann::json::array(); j["atlases"] = nlohmann::json::array(); j["cells"] = nlohmann::json::array();
-		for (auto& l : P.layers) j["layers"].push_back({ {"tex", util::iso_8859_1_to_utf8(l.tex)}, {"tiling", l.tiling}, {"rot", l.rot}, {"flipH", l.flipH}, {"flipV", l.flipV}, {"offX", l.offX}, {"offY", l.offY} });
+		for (auto& l : P.layers) j["layers"].push_back({ {"tex", util::iso_8859_1_to_utf8(l.tex)}, {"tiling", l.tiling}, {"rot", l.rot}, {"flipH", l.flipH}, {"flipV", l.flipV}, {"offX", l.offX}, {"offY", l.offY}, {"ribbon", l.ribbon} });
 		for (auto& a : P.atlases)
 		{
 			std::ostringstream hs; hs << std::hex << (unsigned long long)a.hash;

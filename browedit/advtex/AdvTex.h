@@ -11,6 +11,7 @@ class Map;
 class Gnd;
 class MapView;
 class BrowEdit;
+class Action;
 
 namespace gl { class Texture; }
 
@@ -32,6 +33,7 @@ namespace advtex
 		int rot = 0;					// 0..3 = 0, 90, 180, 270 degrees
 		bool flipH = false, flipV = false;
 		float offX = 0.0f, offY = 0.0f;	// in repeats
+		bool ribbon = false;			// cliff ribbon: the mask carries 4 corner UVs after the alpha values, instead of world tiling
 	};
 	struct Orig { bool valid = false; std::string file; float uv[8] = { 0,0,0,0,0,0,0,0 }; };	// the tile as it was before the first bake
 	typedef std::map<int, std::vector<uint8_t>> Masks;					// layer index -> MASK*MASK alpha
@@ -99,6 +101,16 @@ namespace advtex
 	bool assignSlot(Project& P, Map* map, int k, Cell& c);
 	Atlas* atlasById(Project& P, int id);
 	void renderCellToAtlas(Gnd* gnd, Project& P, Atlas& A, int k, Cell& c);
+
+	// cliff brush: one cell of a baked cliff ribbon (rock band laid along the cliff curve, blended into the ground per pixel)
+	struct RibbonCell
+	{
+		int x = 0, y = 0;
+		float uv[8];					// (u,v) of the four tile corners, in tile order v1..v4 (= height index 0..3)
+		std::vector<uint8_t> alpha;		// MASK*MASK, 255 = rock texture, 0 = ground
+	};
+	// returns an undoable action that puts the ribbon into the draft (preview now, files on Build / save); groundTex may be empty (the cell's own texture is the ground)
+	Action* makeRibbonAction(Map* map, BrowEdit* be, const std::string& ribbonTex, const std::string& groundTex, const std::vector<RibbonCell>& cells, const std::string& title);
 
 	// UI (AdvTexMode.cpp)
 	void frame(MapView* mv, BrowEdit* be);		// every frame, every mode: live preview + delayed bake

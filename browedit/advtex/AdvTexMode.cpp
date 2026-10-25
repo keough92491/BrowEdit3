@@ -21,6 +21,7 @@
 #include <imgui_internal.h>
 #include <GLFW/glfw3.h>
 #include <algorithm>
+#include <cstring>
 #include <cmath>
 #include <limits>
 #include <queue>
@@ -74,7 +75,7 @@ namespace advtex
 
 	static int layerForFile(Project& P, const std::string& file)
 	{
-		for (int i = 0; i < (int)P.layers.size(); i++) if (P.layers[i].tex == file) return i;
+		for (int i = 0; i < (int)P.layers.size(); i++) if (P.layers[i].tex == file && !P.layers[i].ribbon) return i;
 		PaintLayer l; l.tex = file;
 		P.layers.push_back(l);
 		getImg(file);		// load it now so the first stroke does not stall
@@ -111,6 +112,35 @@ namespace advtex
 		void undo(Map* map, BrowEdit* be) override { apply(map, be, before); }
 		std::string str() override { return title; }
 	};
+
+	Action* makeRibbonAction(Map* map, BrowEdit* be, const std::string& ribbonTex, const std::string& groundTex, const std::vector<RibbonCell>& cells, const std::string& title)
+	{
+		auto& P = project(map, be);
+		auto gnd = map->rootNode->getComponent<Gnd>();
+		if (cells.empty() || ribbonTex.empty()) return nullptr;
+		int ground = groundTex.empty() ? -1 : layerForFile(P, groundTex);
+		int rib = -1;
+		for (int i = 0; i < (int)P.layers.size(); i++) if (P.layers[i].ribbon && P.layers[i].tex == ribbonTex && i > ground) rib = i;
+		if (rib < 0) { PaintLayer l; l.tex = ribbonTex; l.ribbon = true; P.layers.push_back(l); rib = (int)P.layers.size() - 1; getImg(ribbonTex); }
+		std::map<int, Masks> before, after;
+		for (auto& rc : cells)
+		{
+			int k = key(rc.x, rc.y);
+			if (rc.x < 0 || rc.y < 0 || rc.x >= gnd->width || rc.y >= gnd->height || gnd->cubes[rc.x][rc.y]->tileUp < 0) continue;
+			auto it = P.cells.find(k);
+			Masks b = it != P.cells.end() ? it->second.masks : Masks();
+			Masks a = b;
+			if (ground >= 0) a[ground].assign(MASK * MASK, 255);
+			std::vector<uint8_t> mk = rc.alpha;
+			mk.resize(MASK * MASK, 0);
+			mk.resize(MASK * MASK + 32);
+			std::memcpy(mk.data() + MASK * MASK, rc.uv, 32);
+			a[rib] = mk;
+			before[k] = b; after[k] = a;
+		}
+		if (after.empty()) return nullptr;
+		return new PaintAction(before, after, title);
+	}
 
 	// ------------------------------------------------------------------ painting
 	static Cell* touchCell(Project& P, Gnd* gnd, int cx, int cy, bool create)

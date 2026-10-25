@@ -11,6 +11,7 @@
 #include <browedit/actions/CubeTileChangeAction.h>
 #include <browedit/actions/TileNewAction.h>
 #include <browedit/gl/Texture.h>
+#include <browedit/advtex/AdvTex.h>
 #include <imgui.h>
 #include <algorithm>
 #include <cmath>
@@ -329,6 +330,91 @@ namespace cliff
 			}
 		}
 
+
+		// per-pixel blended ribbon through Advanced Texture: each cell gets an alpha mask (rock where the band is, ground elsewhere) and four corner UVs
+		void ribbonBake(Map* map, BrowEdit* browEdit, Gnd* gnd, GroupAction* ga, const std::vector<glm::ivec2>& tiles)
+		{
+			auto& st = settings();
+			if (centres.empty() || tiles.empty()) return;
+			float tx0 = 1e9f, tz0 = 1e9f, tx1 = -1e9f, tz1 = -1e9f;
+			for (auto& t : tiles) for (int i = 0; i < 4; i++)
+			{
+				glm::vec2 c = cornerPos(gnd, t.x, t.y, i);
+				tx0 = std::min(tx0, c.x); tx1 = std::max(tx1, c.x); tz0 = std::min(tz0, c.y); tz1 = std::max(tz1, c.y);
+			}
+			tx0 -= 2; tz0 -= 2; tx1 += 2; tz1 += 2;
+			auto polys = contours(st, tx0, tz0, tx1, tz1);
+			if (polys.empty()) return;
+			float meanH = 0; int cnt = 0;
+			for (auto& kv : origHeights) for (int i = 0; i < 4; i++) { meanH += kv.second[i]; cnt++; }
+			meanH = cnt ? meanH / cnt : 0.0f;
+			bool insideHigh = st.mode == 0 || (st.mode == 2 && st.height < meanH);
+			float w = std::max(0.5f, st.edgeWidth);
+			float span = st.ribbonBottom - st.ribbonTop, vmid = (st.ribbonTop + st.ribbonBottom) * 0.5f;
+			const float sgnHigh = insideHigh ? 1.0f : -1.0f;
+			auto dOf = [&](const glm::vec2& p) { return sgnHigh * (fieldAt(st, p) - w * 0.5f); };
+			auto ss = [](float x) { x = std::clamp(x, 0.0f, 1.0f); return x * x * (3 - 2 * x); };
+			std::vector<advtex::RibbonCell> out;
+			const int M = advtex::MASK;
+			for (auto& t : tiles)
+			{
+				auto c = gnd->cubes[t.x][t.y];
+				if (c->tileUp < 0) continue;
+				glm::vec2 centre = (cornerPos(gnd, t.x, t.y, 0) + cornerPos(gnd, t.x, t.y, 3)) * 0.5f;
+				// cheap cull: tile far from the band
+				float dc = dOf(centre);
+				if (std::fabs(dc) > w * 0.5f + span * 0 + 2.5f * (1.0f + 0.0f)) continue;
+				// nearest contour point at the centre: tangent and arc length for u
+				int bc = -1, bi = 0; float best = 1e9f;
+				for (int ci = 0; ci < (int)polys.size(); ci++)
+					for (int i = 0; i < (int)polys[ci].p.size(); i++)
+					{
+						float d2 = glm::dot(polys[ci].p[i] - centre, polys[ci].p[i] - centre);
+						if (d2 < best) { best = d2; bc = ci; bi = i; }
+					}
+				if (bc < 0) continue;
+				auto& pl = polys[bc];
+				int n = (int)pl.p.size();
+				glm::vec2 tg = pl.p[std::min(n - 1, bi + 2)] - pl.p[std::max(0, bi - 2)];
+				if (pl.closed) tg = pl.p[(bi + 2) % n] - pl.p[(bi + n - 2) % n];
+				if (glm::length(tg) < 1e-5f) continue;
+				tg = glm::normalize(tg);
+				advtex::RibbonCell rc; rc.x = t.x; rc.y = t.y;
+				float u[4], umn = 1e9f;
+				for (int i = 0; i < 4; i++)
+				{
+					glm::vec2 cp = cornerPos(gnd, t.x, t.y, i);
+					u[i] = pl.k * (pl.s[bi] + glm::dot(cp - centre, tg)) * (st.ribbonFlip ? -1.0f : 1.0f);
+					umn = std::min(umn, u[i]);
+				}
+				float shift = std::floor(umn);
+				for (int i = 0; i < 4; i++)
+				{
+					glm::vec2 cp = cornerPos(gnd, t.x, t.y, i);
+					rc.uv[2 * i] = u[i] - shift;
+					rc.uv[2 * i + 1] = vmid - span * dOf(cp) / w;
+				}
+				rc.alpha.assign((size_t)M * M, 0);
+				bool any = false;
+				glm::vec2 origin(cornerPos(gnd, t.x, t.y, 2));		// (x, z) corner of the cell
+				for (int j = 0; j < M; j++)
+					for (int i = 0; i < M; i++)
+					{
+						glm::vec2 p = origin + glm::vec2((i + 0.5f) / M, (j + 0.5f) / M);
+						float v = vmid - span * dOf(p) / w;
+						v += (fbm(p.x * 3.3f, p.y * 3.3f, strokeSeed + 31) - 0.5f) * 2.0f * st.ribbonNoise;
+						float soft = std::max(0.01f, st.ribbonSoft);
+						float a = ss(v / soft) * ss((1.0f - v) / soft);
+						uint8_t av = (uint8_t)std::lround(a * 255.0f);
+						rc.alpha[(size_t)j * M + i] = av;
+						any |= av > 4;
+					}
+				if (any) out.push_back(rc);
+			}
+			if (auto act = advtex::makeRibbonAction(map, browEdit, st.ribbonTex, st.ribbonGround, out, "Cliff ribbon"))
+				ga->addAction(act);
+		}
+
 		void finish(MapView* mv, BrowEdit* browEdit, Map* map, Gnd* gnd, GndRenderer* gr)
 		{
 			auto& s = settings();
@@ -499,7 +585,8 @@ namespace cliff
 			if (s.profile == 0 && s.ribbon && !s.ribbonTex.empty())
 			{
 				int rt = textureIndexFor(gnd, s.ribbonTex);
-				if (rt >= 0) { { std::vector<glm::ivec2> rtiles; for (auto& r : region) rtiles.push_back(glm::ivec2(r.first, r.second)); ribbonTiles(gnd, ga, nextId, rt, rtiles); } ribbonDone = true; }
+				if (rt >= 0 && s.ribbonBake) { std::vector<glm::ivec2> rtiles; for (auto& r : region) rtiles.push_back(glm::ivec2(r.first, r.second)); ribbonBake(map, browEdit, gnd, ga, rtiles); ribbonDone = true; }
+				else if (rt >= 0) { { std::vector<glm::ivec2> rtiles; for (auto& r : region) rtiles.push_back(glm::ivec2(r.first, r.second)); ribbonTiles(gnd, ga, nextId, rt, rtiles); } ribbonDone = true; }
 			}
 			// slope texture: steep ground gets rock
 			if (s.profile == 0 && !ribbonDone && s.texSlope && !s.slopeTextures.empty())
@@ -679,7 +766,19 @@ namespace cliff
 				ImGui::SliderFloat("Cubes per repeat", &s.ribbonPeriod, 1.0f, 16.0f);
 				ImGui::SliderFloat("Rock band top (v)", &s.ribbonTop, 0.0f, 0.5f);
 				ImGui::SliderFloat("Rock band bottom (v)", &s.ribbonBottom, 0.5f, 1.0f);
-				ImGui::SliderFloat("Foot blend (tiles)", &s.ribbonFoot, 0.3f, 4.0f);
+				ImGui::Checkbox("Bake blend with ground (Advanced Texture)", &s.ribbonBake);
+				if (s.ribbonBake)
+				{
+					ImGui::Text("Ground texture: %s", s.ribbonGround.empty() ? "(the tiles' own ground)" : s.ribbonGround.c_str());
+					if (ImGui::Button("Use picker texture as ground") && gnd && mv->textureSelected >= 0 && mv->textureSelected < (int)gnd->textures.size())
+						s.ribbonGround = gnd->textures[mv->textureSelected]->file;
+					ImGui::SameLine(); if (ImGui::Button("Clear##ground")) s.ribbonGround.clear();
+					ImGui::SliderFloat("Edge softness", &s.ribbonSoft, 0.01f, 0.3f);
+					ImGui::SliderFloat("Edge ragged", &s.ribbonNoise, 0.0f, 0.2f);
+					ImGui::TextWrapped("The blend is a draft preview. Open the Advanced Texture mode (F12) and press Build, or answer the save prompt, to write the texture files.");
+				}
+				else
+					ImGui::SliderFloat("Foot blend (tiles)", &s.ribbonFoot, 0.3f, 4.0f);
 				ImGui::Checkbox("Flip direction", &s.ribbonFlip);
 				ImGui::TextWrapped("The rock band texture is laid along the cliff curve: u follows the curve, v goes across the slope, so it bends round corners without seams. Used instead of the random slope textures when set.");
 			}

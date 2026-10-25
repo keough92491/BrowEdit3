@@ -36,6 +36,10 @@ namespace cliff
 		float ribbonPeriod = 5.0f;		// cubes per texture repeat along the cliff
 		float ribbonTop = 0.08f, ribbonBottom = 0.92f;		// where the rock band sits in the texture (v)
 		bool ribbonFlip = false;
+		bool ribbonBake = true;			// bake the blend per pixel through Advanced Texture (draft preview, files on Build/save); off = plain tile UVs
+		std::string ribbonGround;		// optional ground texture the rock blends into (empty = the ground the tiles already have)
+		float ribbonSoft = 0.07f;		// softness of the rock edge (texture v units)
+		float ribbonNoise = 0.06f;		// how ragged the edge is
 		float ribbonFoot = 1.5f;		// ground (tiles) below the cliff foot over which the lower fringe of the texture is spread
 		float ribbonMaxStretch = 1.8f;		// tiles that would stretch the texture more than this are left alone
 		// smart edge texturing (sheer cliffs): ground pieces that blend rock into grass along the cliff
