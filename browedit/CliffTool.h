@@ -36,6 +36,7 @@ namespace cliff
 		float ribbonPeriod = 5.0f;		// cubes per texture repeat along the cliff
 		float ribbonTop = 0.08f, ribbonBottom = 0.92f;		// where the rock band sits in the texture (v)
 		bool ribbonFlip = false;
+		float ribbonMaxStretch = 1.8f;		// tiles that would stretch the texture more than this are left alone
 		// smart edge texturing (sheer cliffs): ground pieces that blend rock into grass along the cliff
 		bool smartEdges = true;
 		std::string pieceTex[3];		// 0 straight edge, 1 rounded corner, 2 diagonal

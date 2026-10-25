@@ -296,6 +296,21 @@ namespace cliff
 					for (int i = 1; i < 4; i++) u[i] = u[0] + std::fmod(std::fmod(u[i] - u[0] + pl.period * 0.5f, pl.period) + pl.period, pl.period) - pl.period * 0.5f;
 				float umn = std::min(std::min(u[0], u[1]), std::min(u[2], u[3])), umx = std::max(std::max(u[0], u[1]), std::max(u[2], u[3]));
 				if (umx - umn > 0.9f) continue;
+				// the rock band does not cover this tile completely: clamping v would smear the edge pixels into streaks, so leave it as it was
+				if (vmn < -0.03f || vmx > 1.03f) continue;
+				{
+					glm::vec3 P[4]; glm::vec2 U[4];
+					for (int i = 0; i < 4; i++) { glm::vec2 cp = cornerPos(gnd, t.x, t.y, i); P[i] = glm::vec3(cp.x * 10.0f, -c->heights[i], cp.y * 10.0f); U[i] = glm::vec2(u[i], v[i]); }
+					glm::vec3 e1 = ((P[1] - P[0]) + (P[3] - P[2])) * 0.5f, e2 = ((P[2] - P[0]) + (P[3] - P[1])) * 0.5f;
+					glm::vec2 a1 = ((U[1] - U[0]) + (U[3] - U[2])) * 0.5f, a2 = ((U[2] - U[0]) + (U[3] - U[1])) * 0.5f;
+					float det = a1.x * a2.y - a2.x * a1.y;
+					if (std::fabs(det) < 1e-5f) continue;
+					glm::vec3 m1 = (e1 * a2.y - e2 * a1.y) / det, m2 = (e2 * a1.x - e1 * a2.x) / det;		// d position / d u, d position / d v
+					float A = glm::dot(m1, m1), B = glm::dot(m1, m2), C = glm::dot(m2, m2);
+					float tr = A + C, dt = std::sqrt(std::max(0.0f, (A - C) * (A - C) + 4 * B * B));
+					float l1 = (tr + dt) * 0.5f, l2 = std::max((tr - dt) * 0.5f, 1e-9f);
+					if (std::sqrt(l1 / l2) > st.ribbonMaxStretch) continue;		// would smear the texture
+				}
 				float shift = std::floor(umn);
 				for (int i = 0; i < 4; i++) { u[i] -= shift; v[i] = std::clamp(v[i], 0.0f, 1.0f); }
 				auto nt = new Gnd::Tile(*gnd->tiles[c->tileUp]);
@@ -658,6 +673,7 @@ namespace cliff
 				ImGui::SliderFloat("Rock band top (v)", &s.ribbonTop, 0.0f, 0.5f);
 				ImGui::SliderFloat("Rock band bottom (v)", &s.ribbonBottom, 0.5f, 1.0f);
 				ImGui::Checkbox("Flip direction", &s.ribbonFlip);
+				ImGui::SliderFloat("Max stretch", &s.ribbonMaxStretch, 1.1f, 4.0f);
 				ImGui::TextWrapped("The rock band texture is laid along the cliff curve: u follows the curve, v goes across the slope, so it bends round corners without seams. Used instead of the random slope textures when set.");
 			}
 			ImGui::Checkbox("Texture steep slopes (random, when no ribbon)", &s.texSlope);
