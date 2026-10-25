@@ -155,6 +155,16 @@ namespace cliff
 		}
 
 
+
+		float bandWidth(const Settings& st) { return std::max(0.5f, st.ribbonBandW > 0.0f ? st.ribbonBandW : st.edgeWidth); }
+		float effPeriod(const Settings& st)		// tiles per texture repeat along the cliff
+		{
+			if (!st.ribbonAuto) return std::max(0.5f, st.ribbonPeriod);
+			float bw = bandWidth(st), h = std::fabs(st.height);
+			float face = std::sqrt((bw * 10.0f) * (bw * 10.0f) + h * h);			// length of the face seen from the side, world units
+			float span = std::max(0.2f, st.ribbonBottom - st.ribbonTop);
+			return std::max(0.5f, face / span / 10.0f);
+		}
 		struct Poly { std::vector<glm::vec2> p; std::vector<float> s; bool closed = false; float L = 0, k = 0, period = 0; };
 
 		float fieldAt(const Settings& st, const glm::vec2& p)
@@ -234,7 +244,7 @@ namespace cliff
 				pl.s.assign(n, 0.0f);
 				for (int i = 1; i < n; i++) pl.s[i] = pl.s[i - 1] + glm::length(pl.p[i] - pl.p[i - 1]);
 				pl.L = pl.s[n - 1] + (pl.closed ? glm::length(pl.p[0] - pl.p[n - 1]) : 0.0f);
-				float per = std::max(0.5f, st.ribbonPeriod);
+				float per = effPeriod(st);
 				if (pl.closed) { int periods = std::max(1, (int)std::lround(pl.L / per)); pl.k = periods / pl.L; pl.period = (float)periods; }
 				else pl.k = 1.0f / per;
 			}
@@ -260,7 +270,7 @@ namespace cliff
 			for (auto& kv : origHeights) for (int i = 0; i < 4; i++) { meanH += kv.second[i]; cnt++; }
 			meanH = cnt ? meanH / cnt : 0.0f;
 			bool insideHigh = st.mode == 0 || (st.mode == 2 && st.height < meanH);
-			float w = std::max(0.5f, st.edgeWidth);
+			float w = bandWidth(st);
 			float span = st.ribbonBottom - st.ribbonTop, vmid = (st.ribbonTop + st.ribbonBottom) * 0.5f;
 			struct Hit { int ci; float d, u; int bi; };
 			auto eval = [&](const glm::vec2& p, int forceCi) -> Hit
@@ -349,7 +359,7 @@ namespace cliff
 			for (auto& kv : origHeights) for (int i = 0; i < 4; i++) { meanH += kv.second[i]; cnt++; }
 			meanH = cnt ? meanH / cnt : 0.0f;
 			bool insideHigh = st.mode == 0 || (st.mode == 2 && st.height < meanH);
-			float w = std::max(0.5f, st.edgeWidth);
+			float w = bandWidth(st);
 			float span = st.ribbonBottom - st.ribbonTop, vmid = (st.ribbonTop + st.ribbonBottom) * 0.5f;
 			const float sgnHigh = insideHigh ? 1.0f : -1.0f;
 			auto dOf = [&](const glm::vec2& p) { return sgnHigh * (fieldAt(st, p) - w * 0.5f); };
@@ -763,7 +773,12 @@ namespace cliff
 				ImGui::Text("Ribbon texture: %s", s.ribbonTex.empty() ? "(none)" : s.ribbonTex.c_str());
 				if (ImGui::Button("Use picker texture##ribbon") && gnd && mv->textureSelected >= 0 && mv->textureSelected < (int)gnd->textures.size())
 					s.ribbonTex = gnd->textures[mv->textureSelected]->file;
-				ImGui::SliderFloat("Cubes per repeat", &s.ribbonPeriod, 1.0f, 16.0f);
+				ImGui::Checkbox("Auto texture scale (matches the 3D face)", &s.ribbonAuto);
+				if (!s.ribbonAuto)
+					ImGui::SliderFloat("Cells per repeat (along)", &s.ribbonPeriod, 0.5f, 24.0f);
+				else
+					ImGui::TextDisabled("Cells per repeat (along): %.1f", effPeriod(s));
+				ImGui::SliderFloat("Band width (tiles, 0 = slope width)", &s.ribbonBandW, 0.0f, 20.0f);
 				ImGui::SliderFloat("Rock band top (v)", &s.ribbonTop, 0.0f, 0.5f);
 				ImGui::SliderFloat("Rock band bottom (v)", &s.ribbonBottom, 0.5f, 1.0f);
 				ImGui::Checkbox("Bake blend with ground (Advanced Texture)", &s.ribbonBake);
