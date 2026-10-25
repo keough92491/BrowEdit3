@@ -15,7 +15,23 @@ namespace cliff
 {
 	struct Settings
 	{
-		bool active = false;		// cliff brush instead of the height doodle brush
+		bool active = false;
+		// cave brush: carve a walkable floor into a rock mass
+		bool cave = false;
+		float caveSlope = 3.5f;			// wall slope width (tiles)
+		bool caveMass = true;			// raise a rock mass around the floor
+		float caveRock = 30.0f;			// rock mass height
+		float caveRockW = 5.0f;			// thickness of the rock top (tiles)
+		float caveOuter = 4.0f;			// outer slope down to the ground (tiles)
+		bool caveFloorAbs = false;
+		float caveFloorH = 0.0f;
+		bool caveBake = true;
+		std::string caveFloorTex, caveEdgeTex, caveRockTex;
+		float caveFloorTiling = 3.0f, caveRockTiling = 4.0f;
+		float caveBand = 2.5f;			// tiles covered by the edge texture across the wall foot
+		float caveEdgeTop = 0.36f, caveEdgeBottom = 0.72f;	// where the edge band sits in the edge texture (v)
+		bool caveEdgeFlip = false;
+		float caveEdgeShift = 0.1f;		// moves the band towards the wall (+) or the floor (-), in bands		// cliff brush instead of the height doodle brush
 		int mode = 0;			// 0 raise, 1 lower, 2 set to height
 		float radius = 5.0f;		// tiles
 		float height = 20.0f;
@@ -57,5 +73,6 @@ namespace cliff
 	// called when a texture is clicked in the texture picker while the cliff brush is active: adds it to the active texture list
 	void onTexturePicked(const std::string& file);
 	void showOptions(BrowEdit* browEdit, MapView* mapView);
+	void showCaveOptions(BrowEdit* browEdit, MapView* mapView);
 	void update(MapView* mv, BrowEdit* browEdit, Map* map, Gnd* gnd, GndRenderer* gr, const glm::vec3& mouse3D);
 }

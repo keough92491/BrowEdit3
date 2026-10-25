@@ -142,6 +142,53 @@ namespace advtex
 		return new PaintAction(before, after, title);
 	}
 
+	Action* makeLayeredAction(Map* map, BrowEdit* be, const std::vector<LayerSpec>& specs, const std::vector<LayeredCell>& cells, const std::string& title)
+	{
+		auto& P = project(map, be);
+		auto gnd = map->rootNode->getComponent<Gnd>();
+		if (cells.empty() || specs.empty()) return nullptr;
+		std::vector<int> idx(specs.size(), -1);
+		int prev = -1;
+		for (size_t j = 0; j < specs.size(); j++)
+		{
+			if (specs[j].tex.empty()) continue;
+			int found = -1;
+			for (int i = prev + 1; i < (int)P.layers.size(); i++)
+				if (P.layers[i].tex == specs[j].tex && P.layers[i].ribbon == specs[j].ribbon && (specs[j].ribbon || std::fabs(P.layers[i].tiling - specs[j].tiling) < 1e-4f)) { found = i; break; }
+			if (found < 0) { PaintLayer l; l.tex = specs[j].tex; l.ribbon = specs[j].ribbon; l.tiling = specs[j].tiling; P.layers.push_back(l); found = (int)P.layers.size() - 1; getImg(l.tex); }
+			idx[j] = found; prev = found;
+		}
+		std::map<int, Masks> before, after;
+		for (auto& lc : cells)
+		{
+			int k = key(lc.x, lc.y);
+			if (lc.x < 0 || lc.y < 0 || lc.x >= gnd->width || lc.y >= gnd->height || gnd->cubes[lc.x][lc.y]->tileUp < 0) continue;
+			auto it = P.cells.find(k);
+			Masks b = it != P.cells.end() ? it->second.masks : Masks();
+			Masks a = b;
+			bool any = false;
+			for (size_t j = 0; j < specs.size() && j < lc.alpha.size(); j++)
+			{
+				if (idx[j] < 0) continue;
+				if (lc.alpha[j].empty()) continue;
+				std::vector<uint8_t> mk = lc.alpha[j];
+				mk.resize(MASK * MASK, 0);
+				if (specs[j].ribbon)
+				{
+					mk.resize(MASK * MASK + 32);
+					float f[8] = { 0,0,0,0,0,0,0,0 };
+					for (int q = 0; q < 8 && q < (int)lc.uv[j].size(); q++) f[q] = lc.uv[j][q];
+					std::memcpy(mk.data() + MASK * MASK, f, 32);
+				}
+				a[idx[j]] = mk; any = true;
+			}
+			if (!any) continue;
+			before[k] = b; after[k] = a;
+		}
+		if (after.empty()) return nullptr;
+		return new PaintAction(before, after, title);
+	}
+
 	// ------------------------------------------------------------------ painting
 	static Cell* touchCell(Project& P, Gnd* gnd, int cx, int cy, bool create)
 	{

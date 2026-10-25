@@ -177,11 +177,14 @@ void BrowEdit::showHeightWindow()
 	else //heightDoodle
 	{
 		ImGui::RadioButton("Height brush", &cliffBrushInt, 0); ImGui::SameLine();
-		ImGui::RadioButton("Cliff brush", &cliffBrushInt, 1);
-		cliff::settings().active = cliffBrushInt == 1;
+		ImGui::RadioButton("Cliff brush", &cliffBrushInt, 1); ImGui::SameLine();
+		ImGui::RadioButton("Cave brush", &cliffBrushInt, 2);
+		cliff::settings().active = cliffBrushInt >= 1;
+		cliff::settings().cave = cliffBrushInt == 2;
 		if (cliff::settings().active)
 		{
-			cliff::showOptions(this, activeMapView);
+			if (cliff::settings().cave) cliff::showCaveOptions(this, activeMapView);
+			else cliff::showOptions(this, activeMapView);
 		}
 		else
 		if (ImGui::TreeNodeEx("Brush Options", ImGuiTreeNodeFlags_DefaultOpen))

@@ -428,9 +428,152 @@ namespace cliff
 				ga->addAction(act);
 		}
 
+
+		float ss3(float x) { x = std::clamp(x, 0.0f, 1.0f); return x * x * (3 - 2 * x); }
+		float caveFloor = 0.0f;
+
+		// distance outside the carved floor (> 0 in the rock), from the noisy brush field
+		float outsideDist(const Settings& st, const glm::vec2& p) { return -fieldAt(st, p); }
+
+		float caveLimit(const Settings& st) { return st.caveSlope + (st.caveMass ? st.caveRockW + st.caveOuter : 0.0f); }
+
+		void stampCave(Gnd* gnd, GndRenderer* gr, const glm::vec2& c)
+		{
+			auto& s = settings();
+			float reach = s.radius * (1.0f + s.roughness * 0.5f) + caveLimit(s) + 2.0f;
+			int x0 = std::max(0, (int)std::floor(c.x - reach)), x1 = std::min(gnd->width - 1, (int)std::ceil(c.x + reach));
+			int y0 = std::max(0, (int)std::floor(gnd->height - c.y - reach)), y1 = std::min(gnd->height - 1, (int)std::ceil(gnd->height - c.y + reach));
+			for (int x = x0; x <= x1; x++)
+				for (int y = y0; y <= y1; y++)
+				{
+					auto cube = gnd->cubes[x][y];
+					float dF[4]; bool any = false;
+					for (int i = 0; i < 4; i++) { dF[i] = outsideDist(s, cornerPos(gnd, x, y, i)); any |= dF[i] < caveLimit(s); }
+					if (!any) continue;
+					if (origHeights.find(cube) == origHeights.end())
+					{
+						for (int i = 0; i < 4; i++) origHeights[cube][i] = cube->heights[i];
+						touched.push_back(glm::ivec2(x, y));
+					}
+					for (int i = 0; i < 4; i++)
+					{
+						float o = origHeights[cube][i], d = dF[i];
+						float wf = d <= 0 ? 1.0f : 1.0f - ss3(d / std::max(0.2f, s.caveSlope));
+						float hRock = o;
+						if (s.caveMass)
+						{
+							float outer = std::max(0.2f, s.caveOuter);
+							float wm = ss3(d / std::max(0.2f, s.caveSlope)) * ss3((s.caveSlope + s.caveRockW + outer - d) / outer);
+							hRock = o - s.caveRock * wm;
+						}
+						cube->heights[i] = hRock * (1.0f - wf) + caveFloor * wf;
+					}
+					cube->calcNormal();
+					gr->setChunkDirty(x, y);
+				}
+		}
+
+		// cave textures: floor (world tiled), rock (world tiled) over the wall and the top, and the edge strip laid along the wall foot (continuous UVs)
+		void caveBake(Map* map, BrowEdit* browEdit, Gnd* gnd, GroupAction* ga, const std::vector<glm::ivec2>& tiles)
+		{
+			auto& st = settings();
+			if (centres.empty() || tiles.empty()) return;
+			bool wantFloor = !st.caveFloorTex.empty(), wantRock = st.caveMass && !st.caveRockTex.empty(), wantEdge = !st.caveEdgeTex.empty();
+			if (!wantFloor && !wantRock && !wantEdge) return;
+			float tx0 = 1e9f, tz0 = 1e9f, tx1 = -1e9f, tz1 = -1e9f;
+			for (auto& t : tiles) for (int i = 0; i < 4; i++)
+			{
+				glm::vec2 c = cornerPos(gnd, t.x, t.y, i);
+				tx0 = std::min(tx0, c.x); tx1 = std::max(tx1, c.x); tz0 = std::min(tz0, c.y); tz1 = std::max(tz1, c.y);
+			}
+			tx0 -= 2; tz0 -= 2; tx1 += 2; tz1 += 2;
+			std::vector<Poly> polys;
+			if (wantEdge) polys = contours(st, tx0, tz0, tx1, tz1);
+			std::vector<advtex::LayerSpec> specs(3);
+			specs[0].tex = wantFloor ? st.caveFloorTex : ""; specs[0].tiling = st.caveFloorTiling;
+			specs[1].tex = wantRock ? st.caveRockTex : ""; specs[1].tiling = st.caveRockTiling;
+			specs[2].tex = wantEdge ? st.caveEdgeTex : ""; specs[2].ribbon = true;
+			float band = std::max(0.5f, st.caveBand);
+			float span = st.caveEdgeBottom - st.caveEdgeTop, vmid = (st.caveEdgeTop + st.caveEdgeBottom) * 0.5f;
+			float sgn = st.caveEdgeFlip ? -1.0f : 1.0f;
+			const int M = advtex::MASK;
+			float limit = caveLimit(st);
+			std::vector<advtex::LayeredCell> out;
+			for (auto& t : tiles)
+			{
+				auto c = gnd->cubes[t.x][t.y];
+				if (c->tileUp < 0) continue;
+				glm::vec2 centre = (cornerPos(gnd, t.x, t.y, 0) + cornerPos(gnd, t.x, t.y, 3)) * 0.5f;
+				if (outsideDist(st, centre) > limit + 1.5f) continue;
+				advtex::LayeredCell lc; lc.x = t.x; lc.y = t.y;
+				lc.alpha.assign(3, std::vector<uint8_t>()); lc.uv.assign(3, std::vector<float>());
+				glm::vec2 origin(cornerPos(gnd, t.x, t.y, 2));
+				std::vector<uint8_t> aF((size_t)M * M, 0), aR((size_t)M * M, 0), aE((size_t)M * M, 0);
+				bool anyF = false, anyR = false, anyE = false;
+				// edge ribbon mapping for the tile
+				float uv[8] = { 0,0,0,0,0,0,0,0 };
+				bool edgeOk = false;
+				auto vOf = [&](float d) { return vmid + sgn * span * (d - st.caveEdgeShift * band) / band; };
+				if (wantEdge && !polys.empty())
+				{
+					int bc = -1, bi = 0; float best = 1e9f;
+					for (int ci = 0; ci < (int)polys.size(); ci++)
+						for (int i = 0; i < (int)polys[ci].p.size(); i++)
+						{
+							float d2 = glm::dot(polys[ci].p[i] - centre, polys[ci].p[i] - centre);
+							if (d2 < best) { best = d2; bc = ci; bi = i; }
+						}
+					if (bc >= 0)
+					{
+						auto& pl = polys[bc];
+						int n = (int)pl.p.size();
+						glm::vec2 tg = pl.p[std::min(n - 1, bi + 2)] - pl.p[std::max(0, bi - 2)];
+						if (pl.closed) tg = pl.p[(bi + 2) % n] - pl.p[(bi + n - 2) % n];
+						if (glm::length(tg) > 1e-5f)
+						{
+							tg = glm::normalize(tg);
+							float u[4], umn = 1e9f;
+							for (int i = 0; i < 4; i++) { glm::vec2 cp = cornerPos(gnd, t.x, t.y, i); u[i] = pl.k * (pl.s[bi] + glm::dot(cp - centre, tg)); umn = std::min(umn, u[i]); }
+							float shift = std::floor(umn);
+							for (int i = 0; i < 4; i++) { uv[2 * i] = u[i] - shift; uv[2 * i + 1] = vOf(outsideDist(st, cornerPos(gnd, t.x, t.y, i))); }
+							edgeOk = true;
+						}
+					}
+				}
+				for (int j = 0; j < M; j++)
+					for (int i = 0; i < M; i++)
+					{
+						glm::vec2 p = origin + glm::vec2((i + 0.5f) / M, (j + 0.5f) / M);
+						float d = outsideDist(st, p);
+						size_t o = (size_t)j * M + i;
+						if (wantFloor) { float a = 1.0f - ss3((d - 0.2f) / 0.8f); aF[o] = (uint8_t)std::lround(a * 255.0f); anyF |= aF[o] > 4; }
+						if (wantRock)
+						{
+							float outer = std::max(0.2f, st.caveOuter);
+							float a = ss3((d - 0.3f) / 0.8f) * (1.0f - ss3((d - (st.caveSlope + st.caveRockW + outer * 0.4f)) / (outer * 0.6f)));
+							aR[o] = (uint8_t)std::lround(a * 255.0f); anyR |= aR[o] > 4;
+						}
+						if (edgeOk)
+						{
+							float v = vOf(d) + (fbm(p.x * 3.3f, p.y * 3.3f, strokeSeed + 53) - 0.5f) * 2.0f * st.ribbonNoise;
+							float soft = std::max(0.01f, st.ribbonSoft);
+							float a = ss3(v / soft) * ss3((1.0f - v) / soft);
+							aE[o] = (uint8_t)std::lround(a * 255.0f); anyE |= aE[o] > 4;
+						}
+					}
+				if (anyF) lc.alpha[0] = aF;
+				if (anyR) lc.alpha[1] = aR;
+				if (anyE) { lc.alpha[2] = aE; lc.uv[2].assign(uv, uv + 8); }
+				if (anyF || anyR || anyE) out.push_back(lc);
+			}
+			advtex::project(map, browEdit).cellPx = st.ribbonDetail;
+			if (auto act = advtex::makeLayeredAction(map, browEdit, specs, out, "Cave textures")) ga->addAction(act);
+		}
+
 		void finish(MapView* mv, BrowEdit* browEdit, Map* map, Gnd* gnd, GndRenderer* gr)
 		{
 			auto& s = settings();
+			const int profNow = s.cave ? 99 : s.profile;
 			if (origHeights.empty()) { stroking = false; return; }
 			auto ga = new GroupAction("Cliff brush");
 			std::map<Gnd::Cube*, float[4]> newHeights;
@@ -458,7 +601,7 @@ namespace cliff
 					}
 
 			// cliff faces
-			if (s.profile == 1 && s.buildWalls && !s.wallTextures.empty() && !gnd->lightmaps.empty())
+			if (profNow == 1 && s.buildWalls && !s.wallTextures.empty() && !gnd->lightmaps.empty())
 			{
 				auto makeWall = [&](int x, int y, int slot)
 				{
@@ -524,7 +667,7 @@ namespace cliff
 				}
 			}
 			// smart edge texturing: pick straight / corner / diagonal piece per ground tile along the cliff and rotate it
-			if (s.profile == 1 && s.smartEdges)
+			if (profNow == 1 && s.smartEdges)
 			{
 				int pidx[3];
 				for (int k = 0; k < 3; k++) pidx[k] = s.pieceTex[k].empty() ? -1 : textureIndexFor(gnd, s.pieceTex[k]);
@@ -595,14 +738,14 @@ namespace cliff
 			}
 			// ribbon texturing for sloped cliffs (continuous UVs along the cliff curve)
 			bool ribbonDone = false;
-			if (s.profile == 0 && s.ribbon && !s.ribbonTex.empty())
+			if (profNow == 0 && s.ribbon && !s.ribbonTex.empty())
 			{
 				int rt = textureIndexFor(gnd, s.ribbonTex);
 				if (rt >= 0 && s.ribbonBake) { std::vector<glm::ivec2> rtiles; for (auto& r : region) rtiles.push_back(glm::ivec2(r.first, r.second)); ribbonBake(map, browEdit, gnd, ga, rtiles); ribbonDone = true; }
 				else if (rt >= 0) { { std::vector<glm::ivec2> rtiles; for (auto& r : region) rtiles.push_back(glm::ivec2(r.first, r.second)); ribbonTiles(gnd, ga, nextId, rt, rtiles); } ribbonDone = true; }
 			}
 			// slope texture: steep ground gets rock
-			if (s.profile == 0 && !ribbonDone && s.texSlope && !s.slopeTextures.empty())
+			if (profNow == 0 && !ribbonDone && s.texSlope && !s.slopeTextures.empty())
 			{
 				for (auto& t : touched)
 				{
@@ -622,7 +765,57 @@ namespace cliff
 
 
 			// GAT: heights follow the new ground, steep cells and wall edges become cliff (type 5), flattened cells are released again
-			if (s.autoGat)
+
+			// cave GAT: floor walkable, rock and walls blocked, heights follow
+			if (s.cave && s.autoGat)
+			{
+				auto gat = map->rootNode->getComponent<Gat>();
+				if (gat && gat->width == gnd->width * 2 && gat->height == gnd->height * 2)
+				{
+					std::map<Gat::Cube*, float[4]> oldT, newT;
+					std::vector<glm::ivec2> selT;
+					std::set<std::pair<int, int>> touchedSet;
+					for (auto& t : touched) touchedSet.insert({ t.x, t.y });
+					for (auto& r : region)
+					{
+						auto cb = gnd->cubes[r.first][r.second];
+						bool wasTouched = touchedSet.count(r) > 0;
+						for (int k = 0; k < 4; k++)
+						{
+							int gx = r.first * 2 + (k % 2), gy = r.second * 2 + (k >> 1);
+							auto gc = gat->cubes[gx][gy];
+							if (wasTouched)
+							{
+								const float* nh = cb->heights;
+								float fu0 = (k % 2) / 2.0f, fu1 = fu0 + 0.5f, fv0 = (k >> 1) / 2.0f, fv1 = fv0 + 0.5f;
+								auto at = [&](float fu, float fv) { return (nh[0] * (1 - fu) + nh[1] * fu) * (1 - fv) + (nh[2] * (1 - fu) + nh[3] * fu) * fv; };
+								float gh[4] = { at(fu0, fv0), at(fu1, fv0), at(fu0, fv1), at(fu1, fv1) };
+								for (int i = 0; i < 4; i++) { oldT[gc][i] = gc->heights[i]; newT[gc][i] = gh[i]; }
+								selT.push_back(glm::ivec2(gx, gy));
+							}
+							glm::vec2 gcenter((float)r.first + (k % 2) * 0.5f + 0.25f, (float)(gnd->height - r.second) + 1.0f - (k >> 1) * 0.5f - 0.25f);
+							float d = outsideDist(s, gcenter);
+							int want = gc->gatType;
+							if (d > 0.4f) { if (gc->gatType == 0 || gc->gatType == 5) want = 1; }
+							else if (gc->gatType == 5) want = 0;
+							else if (gc->gatType == 1 && origHeights.count(cb))
+							{
+								const float* oh = origHeights[cb];
+								float avg = (oh[0] + oh[1] + oh[2] + oh[3]) / 4.0f;
+								if (avg < caveFloor - 5.0f) want = 0;		// it was rock before this stroke
+							}
+							if (want != gc->gatType) ga->addAction(new GatTileChangeAction(glm::ivec2(gx, gy), gc, want));
+						}
+					}
+					if (!newT.empty()) ga->addAction(new CubeHeightChangeAction<Gat, Gat::Cube>(oldT, newT, selT));
+				}
+			}
+			if (s.cave && s.caveBake)
+			{
+				std::vector<glm::ivec2> ctiles; for (auto& r : region) ctiles.push_back(glm::ivec2(r.first, r.second));
+				caveBake(map, browEdit, gnd, ga, ctiles);
+			}
+			if (s.autoGat && !s.cave)
 			{
 				auto gat = map->rootNode->getComponent<Gat>();
 				if (gat && gat->width == gnd->width * 2 && gat->height == gnd->height * 2)
@@ -717,7 +910,7 @@ namespace cliff
 		if (valid)
 		{
 			ImGui::Begin("Statusbar");
-			ImGui::Text("Cliff brush: click or drag. Mouse wheel + Alt = radius, Shift flips raise/lower");
+			ImGui::Text(settings().cave ? "Cave brush: click or drag to carve. Alt + mouse wheel = radius" : "Cliff brush: click or drag. Mouse wheel + Alt = radius, Shift flips raise/lower");
 			ImGui::End();
 			if (io.KeyAlt && io.MouseWheel != 0)
 				s.radius = std::clamp(s.radius + io.MouseWheel * 0.5f, 0.5f, 40.0f);
@@ -731,12 +924,22 @@ namespace cliff
 				origHeights.clear(); weights.clear(); touched.clear();
 				lastCentre = glm::vec2(-1000.0f);
 				centres.clear();
+				if (s.cave)
+				{
+					if (s.caveFloorAbs) caveFloor = s.caveFloorH;
+					else
+					{
+						int cx = std::clamp((int)std::floor(c.x), 0, gnd->width - 1), cy = std::clamp(gnd->height - 1 - (int)std::floor(c.y), 0, gnd->height - 1);
+						auto cb = gnd->cubes[cx][cy];
+						caveFloor = (cb->h1 + cb->h2 + cb->h3 + cb->h4) * 0.25f;
+					}
+				}
 			}
 			if (glm::length(c - lastCentre) >= 0.5f)
 			{
 				int savedMode = s.mode;
 				if (io.KeyShift && s.mode < 2) s.mode = 1 - s.mode;
-				stamp(gnd, gr, c);
+				if (s.cave) stampCave(gnd, gr, c); else stamp(gnd, gr, c);
 				centres.push_back(c);
 				s.mode = savedMode;
 				lastCentre = c;
@@ -762,7 +965,7 @@ namespace cliff
 					float a = i * 6.2831853f / N;
 					glm::vec2 dir(std::cos(a), std::sin(a));
 					// find the radius where the noisy distance reaches the brush radius (edge of the brush), inner = full strength
-					float target = pass == 0 ? s.radius : std::max(0.0f, s.radius - (s.profile == 0 ? s.edgeWidth : 0.0f));
+					float target = s.cave ? (pass == 0 ? s.radius : s.radius + s.caveSlope) : (pass == 0 ? s.radius : std::max(0.0f, s.radius - (s.profile == 0 ? s.edgeWidth : 0.0f)));
 					float r = target;
 					for (int it = 0; it < 4; it++)
 					{
@@ -777,6 +980,61 @@ namespace cliff
 			}
 			glLineWidth(1.0f);
 			glColor4f(1, 1, 1, 1);
+		}
+	}
+
+
+	void showCaveOptions(BrowEdit* browEdit, MapView* mv)
+	{
+		auto& s = settings();
+		auto gnd = mv->map->rootNode->getComponent<Gnd>();
+		ImGui::TextWrapped("Cave brush: paint a walkable floor into a rock mass. Drag for corridors, click for rooms.");
+		ImGui::SliderFloat("Floor radius (tiles)", &s.radius, 0.5f, 20.0f);
+		ImGui::SliderFloat("Wall slope width (tiles)", &s.caveSlope, 0.5f, 10.0f);
+		ImGui::Checkbox("Raise a rock mass around the floor", &s.caveMass);
+		if (s.caveMass)
+		{
+			ImGui::InputFloat("Rock height", &s.caveRock, 1.0f, 5.0f, "%.1f");
+			ImGui::SliderFloat("Rock top thickness (tiles)", &s.caveRockW, 0.0f, 20.0f);
+			ImGui::SliderFloat("Outer slope (tiles)", &s.caveOuter, 0.5f, 12.0f);
+		}
+		else ImGui::TextDisabled("Off: only carves into ground that is already raised.");
+		ImGui::Checkbox("Fixed floor height", &s.caveFloorAbs);
+		if (s.caveFloorAbs) ImGui::InputFloat("Floor height", &s.caveFloorH, 1.0f, 5.0f, "%.1f");
+		else ImGui::TextDisabled("Floor level = the ground where the stroke starts.");
+		ImGui::SliderFloat("Edge roughness", &s.roughness, 0.0f, 1.5f);
+		ImGui::SliderFloat("Curve size", &s.noiseScale, 0.05f, 1.5f);
+		ImGui::InputInt("Shape seed", &s.seed);
+		ImGui::Separator();
+		ImGui::Checkbox("Update the GAT (floor walkable, rock blocked)", &s.autoGat);
+		ImGui::Separator();
+		ImGui::Checkbox("Bake cave textures (Advanced Texture)", &s.caveBake);
+		auto slot = [&](const char* title, std::string& tex)
+		{
+			ImGui::PushID(title);
+			ImGui::Text("%s: %s", title, tex.empty() ? "(none)" : tex.c_str());
+			if (ImGui::Button("Use picker texture") && gnd && mv->textureSelected >= 0 && mv->textureSelected < (int)gnd->textures.size())
+				tex = gnd->textures[mv->textureSelected]->file;
+			ImGui::SameLine(); if (ImGui::Button("Clear")) tex.clear();
+			ImGui::PopID();
+		};
+		if (s.caveBake)
+		{
+			slot("Floor texture", s.caveFloorTex);
+			ImGui::SliderFloat("Floor cells per repeat", &s.caveFloorTiling, 0.5f, 16.0f);
+			slot("Wall edge texture (strip along the wall foot)", s.caveEdgeTex);
+			ImGui::SliderFloat("Edge band width (tiles)", &s.caveBand, 0.5f, 8.0f);
+			ImGui::SliderFloat("Edge band top (v)", &s.caveEdgeTop, 0.0f, 0.5f);
+			ImGui::SliderFloat("Edge band bottom (v)", &s.caveEdgeBottom, 0.5f, 1.0f);
+			ImGui::SliderFloat("Edge shift (floor <-> wall)", &s.caveEdgeShift, -1.0f, 1.0f);
+			ImGui::Checkbox("Flip edge", &s.caveEdgeFlip);
+			slot("Rock texture (walls + top)", s.caveRockTex);
+			ImGui::SliderFloat("Rock cells per repeat", &s.caveRockTiling, 0.5f, 16.0f);
+			ImGui::RadioButton("Detail 30 px/tile", &s.ribbonDetail, 30); ImGui::SameLine();
+			ImGui::RadioButton("Detail 62 px/tile (sharper)", &s.ribbonDetail, 62);
+			ImGui::SliderFloat("Edge softness", &s.ribbonSoft, 0.01f, 0.3f);
+			ImGui::SliderFloat("Edge ragged", &s.ribbonNoise, 0.0f, 0.2f);
+			ImGui::TextWrapped("The edge strip follows the wall curve continuously, so no separate corner pieces are needed. Textures are a draft preview until you press Build in Advanced Texture mode (F12) or answer yes when saving.");
 		}
 	}
 

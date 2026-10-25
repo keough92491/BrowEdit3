@@ -114,6 +114,16 @@ namespace advtex
 	// returns an undoable action that puts the ribbon into the draft (preview now, files on Build / save); groundTex may be empty (the cell's own texture is the ground)
 	Action* makeRibbonAction(Map* map, BrowEdit* be, const std::string& ribbonTex, const std::string& groundTex, const std::vector<RibbonCell>& cells, const std::string& title);
 
+	// several layers at once (cave brush: floor, rock, edge ribbon); layers are created in the order given so later ones draw on top
+	struct LayerSpec { std::string tex; bool ribbon = false; float tiling = 3.0f; };
+	struct LayeredCell
+	{
+		int x = 0, y = 0;
+		std::vector<std::vector<uint8_t>> alpha;	// per spec, MASK*MASK, empty = leave the layer out
+		std::vector<std::vector<float>> uv;		// per spec, 8 floats for ribbon layers
+	};
+	Action* makeLayeredAction(Map* map, BrowEdit* be, const std::vector<LayerSpec>& specs, const std::vector<LayeredCell>& cells, const std::string& title);
+
 	// UI (AdvTexMode.cpp)
 	void frame(MapView* mv, BrowEdit* be);		// every frame, every mode: live preview + delayed bake
 	void showLayerPicker(BrowEdit* be);
