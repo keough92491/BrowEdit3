@@ -8,6 +8,7 @@
 #include <browedit/components/Rsw.h>
 #include <browedit/components/Gnd.h>
 #include <browedit/components/Str.h>
+#include <browedit/components/SprRenderer.h>
 #include <browedit/util/ResourceManager.h>
 #include <algorithm>
 #include <iostream>
