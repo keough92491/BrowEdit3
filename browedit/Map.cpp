@@ -1,5 +1,6 @@
 #include <browedit/sprite/SpriteSystem.h>
 #include <browedit/advtex/AdvTex.h>
+#include <browedit/CliffTool.h>
 #include <Windows.h>
 #include <shellapi.h>
 #include <browedit/Map.h>
@@ -76,6 +77,7 @@ Map::~Map()
 {
 	sprite::System::instance().forget(this);
 	advtex::forget(this);
+	cliff::forgetCave(this);
 	for (auto u : undoStack)
 		delete u;
 	for (auto u : redoStack)

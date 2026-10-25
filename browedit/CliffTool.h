@@ -74,5 +74,7 @@ namespace cliff
 	void onTexturePicked(const std::string& file);
 	void showOptions(BrowEdit* browEdit, MapView* mapView);
 	void showCaveOptions(BrowEdit* browEdit, MapView* mapView);
+	void saveCave(Map* map, BrowEdit* browEdit);
+	void forgetCave(Map* map);
 	void update(MapView* mv, BrowEdit* browEdit, Map* map, Gnd* gnd, GndRenderer* gr, const glm::vec3& mouse3D);
 }

@@ -14,6 +14,10 @@
 #include <browedit/actions/TileNewAction.h>
 #include <browedit/gl/Texture.h>
 #include <browedit/advtex/AdvTex.h>
+#include <json.hpp>
+#include <fstream>
+#include <filesystem>
+#include <unordered_map>
 #include <imgui.h>
 #include <algorithm>
 #include <cmath>
@@ -169,10 +173,61 @@ namespace cliff
 		}
 		struct Poly { std::vector<glm::vec2> p; std::vector<float> s; bool closed = false; float L = 0, k = 0, period = 0; };
 
-		float fieldAt(const Settings& st, const glm::vec2& p)
+
+		// what earlier cave strokes left behind, per grid point of the ground: distance outside the floor, the ground level before the cave, and the floor level
+		struct CaveEnt { float d = 100.0f, base = 0.0f, level = 0.0f; };
+		struct CaveStore { std::unordered_map<int, CaveEnt> pts; bool loaded = false; bool dirty = false; int w = 0; std::string path; };
+		std::map<Map*, CaveStore>& caveStores() { static std::map<Map*, CaveStore> m; return m; }
+		CaveStore* curStore = nullptr;
+		std::string cavePath(Map* map, BrowEdit* be)
+		{
+			std::string n = map->name;
+			std::string path = n.find(":") != std::string::npos ? n : be->config.ropath + n;
+			if (path.size() > 4 && path.substr(path.size() - 4) == ".rsw") path = path.substr(0, path.size() - 4);
+			return path + ".browcave.json";
+		}
+		CaveStore& caveStore(Map* map, BrowEdit* be, Gnd* gnd)
+		{
+			auto& st = caveStores()[map];
+			st.w = gnd->width;
+			if (!st.loaded)
+			{
+				st.loaded = true;
+				st.path = cavePath(map, be);
+				std::ifstream i(st.path, std::ios::binary);
+				if (i)
+				{
+					try
+					{
+						nlohmann::json j; i >> j;
+						for (auto& e : j["pts"]) { CaveEnt ce; ce.d = e[1].get<float>(); ce.base = e[2].get<float>(); ce.level = e[3].get<float>(); st.pts[e[0].get<int>()] = ce; }
+					}
+					catch (std::exception&) {}
+				}
+			}
+			return st;
+		}
+		int latKey(int gx, int gz, int w) { return gz * (w + 1) + gx; }
+		float oldCaveDist(const glm::vec2& p)
+		{
+			if (!curStore || curStore->pts.empty()) return 100.0f;
+			int gx = (int)std::floor(p.x), gz = (int)std::floor(p.y);
+			float fx = p.x - gx, fz = p.y - gz;
+			auto at = [&](int x, int z) { auto it = curStore->pts.find(latKey(x, z, curStore->w)); return it == curStore->pts.end() ? 100.0f : it->second.d; };
+			float a = at(gx, gz) * (1 - fx) + at(gx + 1, gz) * fx, b = at(gx, gz + 1) * (1 - fx) + at(gx + 1, gz + 1) * fx;
+			return a * (1 - fz) + b * fz;
+		}
+		float newField(const Settings& st, const glm::vec2& p)
 		{
 			float m = -1e9f;
 			for (auto& c : centres) m = std::max(m, st.radius - noisyDistance(st, p, c));
+			return m;
+		}
+
+		float fieldAt(const Settings& st, const glm::vec2& p)
+		{
+			float m = newField(st, p);
+			if (st.cave) m = std::max(m, -oldCaveDist(p));		// the cave that is already there stays part of the floor
 			return m;
 		}
 
@@ -437,6 +492,8 @@ namespace cliff
 
 		float caveLimit(const Settings& st) { return st.caveSlope + (st.caveMass ? st.caveRockW + st.caveOuter : 0.0f); }
 
+		std::map<int, std::pair<bool, CaveEnt>> caveBefore;		// grid points as they were before this stroke (for undo)
+
 		void stampCave(Gnd* gnd, GndRenderer* gr, const glm::vec2& c)
 		{
 			auto& s = settings();
@@ -447,8 +504,22 @@ namespace cliff
 				for (int y = y0; y <= y1; y++)
 				{
 					auto cube = gnd->cubes[x][y];
-					float dF[4]; bool any = false;
-					for (int i = 0; i < 4; i++) { dF[i] = outsideDist(s, cornerPos(gnd, x, y, i)); any |= dF[i] < caveLimit(s); }
+					float d[4]; bool any = false;
+					CaveEnt ent[4]; bool has[4];
+					for (int i = 0; i < 4; i++)
+					{
+						glm::vec2 cp = cornerPos(gnd, x, y, i);
+						int key = latKey((int)std::lround(cp.x), (int)std::lround(cp.y), curStore->w);
+						auto it = curStore->pts.find(key);
+						has[i] = it != curStore->pts.end();
+						float dOld = has[i] ? it->second.d : 100.0f;
+						float dNew = -newField(s, cp);
+						d[i] = std::min(dNew, dOld);
+						ent[i] = has[i] ? it->second : CaveEnt();
+						if (dNew < dOld) ent[i].level = caveFloor;
+						else if (!has[i]) ent[i].level = caveFloor;
+						any |= d[i] < caveLimit(s);
+					}
 					if (!any) continue;
 					if (origHeights.find(cube) == origHeights.end())
 					{
@@ -457,21 +528,46 @@ namespace cliff
 					}
 					for (int i = 0; i < 4; i++)
 					{
-						float o = origHeights[cube][i], d = dF[i];
-						float wf = d <= 0 ? 1.0f : 1.0f - ss3(d / std::max(0.2f, s.caveSlope));
-						float hRock = o;
+						float o = origHeights[cube][i];
+						if (!has[i]) ent[i].base = o;
+						ent[i].d = d[i];
+						float dd = d[i];
+						float wf = dd <= 0 ? 1.0f : 1.0f - ss3(dd / std::max(0.2f, s.caveSlope));
+						float hRock = ent[i].base;
 						if (s.caveMass)
 						{
 							float outer = std::max(0.2f, s.caveOuter);
-							float wm = ss3(d / std::max(0.2f, s.caveSlope)) * ss3((s.caveSlope + s.caveRockW + outer - d) / outer);
-							hRock = o - s.caveRock * wm;
+							float wm = ss3(dd / std::max(0.2f, s.caveSlope)) * ss3((s.caveSlope + s.caveRockW + outer - dd) / outer);
+							hRock = ent[i].base - s.caveRock * wm;
 						}
-						cube->heights[i] = hRock * (1.0f - wf) + caveFloor * wf;
+						else if (has[i] == false) hRock = o;
+						cube->heights[i] = hRock * (1.0f - wf) + ent[i].level * wf;
+						glm::vec2 cp = cornerPos(gnd, x, y, i);
+						int key = latKey((int)std::lround(cp.x), (int)std::lround(cp.y), curStore->w);
+						if (!caveBefore.count(key)) caveBefore[key] = { has[i], has[i] ? curStore->pts[key] : CaveEnt() };
+						if (dd < caveLimit(s) + 1.0f) curStore->pts[key] = ent[i];
 					}
 					cube->calcNormal();
 					gr->setChunkDirty(x, y);
 				}
 		}
+
+		class CaveGridAction : public Action
+		{
+			std::map<int, std::pair<bool, CaveEnt>> before, after;
+			void apply(Map* map, BrowEdit* be, const std::map<int, std::pair<bool, CaveEnt>>& data)
+			{
+				auto gnd = map->rootNode->getComponent<Gnd>();
+				auto& st = caveStore(map, be, gnd);
+				for (auto& kv : data) { if (kv.second.first) st.pts[kv.first] = kv.second.second; else st.pts.erase(kv.first); }
+				st.dirty = true;
+			}
+		public:
+			CaveGridAction(const std::map<int, std::pair<bool, CaveEnt>>& b, const std::map<int, std::pair<bool, CaveEnt>>& a) : before(b), after(a) {}
+			void perform(Map* map, BrowEdit* be) override { apply(map, be, after); }
+			void undo(Map* map, BrowEdit* be) override { apply(map, be, before); }
+			std::string str() override { return "Cave shape"; }
+		};
 
 		// cave textures: floor (world tiled), rock (world tiled) over the wall and the top, and the edge strip laid along the wall foot (continuous UVs)
 		void caveBake(Map* map, BrowEdit* browEdit, Gnd* gnd, GroupAction* ga, const std::vector<glm::ivec2>& tiles)
@@ -582,6 +678,12 @@ namespace cliff
 					newHeights[kv.first][i] = kv.first->heights[i];
 			ga->addAction(new CubeHeightChangeAction<Gnd, Gnd::Cube>(origHeights, newHeights, touched));
 
+			if (s.cave && curStore)
+			{
+				std::map<int, std::pair<bool, CaveEnt>> after;
+				for (auto& kv : caveBefore) { auto it = curStore->pts.find(kv.first); after[kv.first] = { it != curStore->pts.end(), it != curStore->pts.end() ? it->second : CaveEnt() }; }
+				ga->addAction(new CaveGridAction(caveBefore, after));
+			}
 			std::mt19937 rng((unsigned)strokeSeed * 7919u + (unsigned)touched.size());
 			auto pick = [&](const std::vector<std::string>& set) -> int {
 				std::vector<int> idx;
@@ -895,10 +997,25 @@ namespace cliff
 				gr->setChunkDirty(r.first, r.second);
 			}
 			map->doAction(ga, browEdit);
-			origHeights.clear(); weights.clear(); touched.clear();
+			origHeights.clear(); weights.clear(); touched.clear(); caveBefore.clear();
 			stroking = false;
 		}
 	}
+
+	void saveCave(Map* map, BrowEdit* browEdit)
+	{
+		auto it = caveStores().find(map);
+		if (it == caveStores().end() || !it->second.dirty || it->second.path.empty()) return;
+		nlohmann::json j; j["version"] = 1; j["pts"] = nlohmann::json::array();
+		for (auto& kv : it->second.pts) if (kv.second.d < 50.0f) j["pts"].push_back({ kv.first, kv.second.d, kv.second.base, kv.second.level });
+		std::string tmp = it->second.path + ".tmp";
+		{ std::ofstream o(tmp, std::ios::binary | std::ios::trunc); if (!o) return; o << j.dump(); }
+		std::error_code ec;
+		std::filesystem::rename(tmp, it->second.path, ec);
+		if (ec) { std::filesystem::remove(it->second.path, ec); std::filesystem::rename(tmp, it->second.path, ec); }
+		it->second.dirty = false;
+	}
+	void forgetCave(Map* map) { caveStores().erase(map); }
 
 	void update(MapView* mv, BrowEdit* browEdit, Map* map, Gnd* gnd, GndRenderer* gr, const glm::vec3& mouse3D)
 	{
@@ -906,6 +1023,7 @@ namespace cliff
 		bool valid = mouse3D.x >= 0 && mouse3D.z >= 0 && mouse3D.x <= gnd->width * 10.0f && mouse3D.z <= gnd->height * 10.0f;
 		glm::vec2 c(mouse3D.x / 10.0f, mouse3D.z / 10.0f);
 		auto& io = ImGui::GetIO();
+		curStore = s.cave ? &caveStore(map, browEdit, gnd) : nullptr;
 
 		if (valid)
 		{
@@ -924,6 +1042,7 @@ namespace cliff
 				origHeights.clear(); weights.clear(); touched.clear();
 				lastCentre = glm::vec2(-1000.0f);
 				centres.clear();
+				caveBefore.clear();
 				if (s.cave)
 				{
 					if (s.caveFloorAbs) caveFloor = s.caveFloorH;
@@ -932,6 +1051,16 @@ namespace cliff
 						int cx = std::clamp((int)std::floor(c.x), 0, gnd->width - 1), cy = std::clamp(gnd->height - 1 - (int)std::floor(c.y), 0, gnd->height - 1);
 						auto cb = gnd->cubes[cx][cy];
 						caveFloor = (cb->h1 + cb->h2 + cb->h3 + cb->h4) * 0.25f;
+						// starting on a cave floor that already exists: continue at its level
+						if (curStore && oldCaveDist(c) <= 0.0f)
+						{
+							int gx = (int)std::lround(c.x), gz = (int)std::lround(c.y);
+							for (int rr = 0; rr < 4; rr++)
+							{
+								auto it = curStore->pts.find(latKey(gx + (rr % 2) - 0, gz + (rr / 2) - 0, curStore->w));
+								if (it != curStore->pts.end() && it->second.d <= 0.0f) { caveFloor = it->second.level; break; }
+							}
+						}
 					}
 				}
 			}

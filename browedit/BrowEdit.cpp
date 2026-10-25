@@ -19,6 +19,7 @@
 #include <browedit/HotkeyRegistry.h>
 #include <browedit/gl/FBO.h>
 #include <browedit/gl/Texture.h>
+#include <browedit/CliffTool.h>
 #include <browedit/NodeRenderer.h>
 #include <browedit/Node.h>
 #include <browedit/Gadget.h>
@@ -751,6 +752,7 @@ void BrowEdit::saveMap(Map* map)
 	}
 
 
+	cliff::saveCave(map, this);
 	if (!advtex::onSave(map, this))	// asks "build the baked textures?" first; the save is repeated with the answer
 		return;
 
