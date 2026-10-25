@@ -57,6 +57,7 @@ namespace advtex
 		bool dirty = true;
 		bool retired = false;
 		std::vector<uint8_t> rgba;		// render cache (not saved)
+		int blockX = -1, blockY = -1;	// map block this atlas covers when laid out by map position (-1 = filled in order)
 		bool complete = false;			// the cache holds every cell of the atlas
 		gl::Texture* prev = nullptr;	// live preview texture (not saved)
 	};
@@ -69,6 +70,7 @@ namespace advtex
 		std::string folder = "advtex";	// below data\texture\, ASCII
 		int cellPx = 30;				// 14 / 30 / 62
 		int atlasSize = 512;			// 256 / 512 (8 bit BMP, must stay below 1 MB)
+		bool blockLayout = true;		// atlas images mirror the map: each atlas holds one square block of cells at their map positions
 		bool autoBake = false;			// off: paint stays a draft preview until 'Build' / save
 		bool loaded = false, pending = false;
 		std::string path, status;

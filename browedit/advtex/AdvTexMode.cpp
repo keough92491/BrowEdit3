@@ -775,6 +775,8 @@ namespace advtex
 			int ai = P.atlasSize == 256 ? 0 : 1;
 			if (ImGui::Combo("Atlas size", &ai, as, 2)) P.atlasSize = ai == 0 ? 256 : 512;
 			ImGui::Checkbox("Build automatically when painting stops (writes the files)", &P.autoBake);
+			ImGui::Checkbox("Square atlas layout (atlas image = a block of the map)", &P.blockLayout);
+			if (ImGui::IsItemHovered()) ImGui::SetTooltip("New atlases hold one square block of map cells at their map positions, so the image looks like a piece of the map.\nA thin cliff across many blocks makes more, emptier files. Off = cells are packed in order (fewest files).\nRebuild all re-lays out existing atlases.");
 			ImGui::TextDisabled("Changing folder or resolution takes effect with 'Rebuild all'.");
 
 			int dirtyCells = 0, painted = 0;

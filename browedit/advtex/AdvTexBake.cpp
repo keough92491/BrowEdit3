@@ -176,14 +176,24 @@ namespace advtex
 	bool assignSlot(Project& P, Map* map, int k, Cell& c)
 	{
 		int block = P.cellPx + 2 * PAD, perRow = P.atlasSize / block, slotCount = perRow * perRow;
+		int bx = P.blockLayout ? keyX(k) / perRow : -1, by = P.blockLayout ? keyY(k) / perRow : -1;
+		int want = P.blockLayout ? (keyY(k) % perRow) * perRow + (keyX(k) % perRow) : -1;
 		for (auto& a : P.atlases)
 		{
 			if (a.retired || a.size != P.atlasSize || a.cellPx != P.cellPx) continue;
+			if (P.blockLayout)
+			{
+				if (a.blockX != bx || a.blockY != by) continue;
+				if (want < (int)a.slots.size() && a.slots[want] < 0) { a.slots[want] = k; c.atlas = a.id; c.slot = want; a.dirty = true; return true; }
+				continue;
+			}
+			if (a.blockX >= 0) continue;
 			for (int s = 0; s < (int)a.slots.size(); s++)
 				if (a.slots[s] < 0) { a.slots[s] = k; c.atlas = a.id; c.slot = s; a.dirty = true; return true; }
 		}
-		Atlas a; a.id = P.nextAtlasId++; a.file = atlasFile(P, map, a.id); a.size = P.atlasSize; a.cellPx = P.cellPx; a.slots.assign(slotCount, -1);
-		a.slots[0] = k; c.atlas = a.id; c.slot = 0; a.dirty = true;
+		Atlas a; a.id = P.nextAtlasId++; a.file = atlasFile(P, map, a.id); a.size = P.atlasSize; a.cellPx = P.cellPx; a.slots.assign(slotCount, -1); a.blockX = bx; a.blockY = by;
+		int first = want >= 0 ? want : 0;
+		a.slots[first] = k; c.atlas = a.id; c.slot = first; a.dirty = true;
 		P.atlases.push_back(a);
 		return true;
 	}
@@ -570,7 +580,7 @@ namespace advtex
 		{
 			auto j = nlohmann::json::parse(i);
 			P.folder = j.value("folder", P.folder); P.cellPx = j.value("cellPx", 30); P.atlasSize = j.value("atlasSize", 512);
-			P.nextAtlasId = j.value("nextAtlasId", 1); P.autoBake = j.value("autoBake", false);
+			P.nextAtlasId = j.value("nextAtlasId", 1); P.autoBake = j.value("autoBake", false); P.blockLayout = j.value("blockLayout", false);
 			for (auto& l : j["layers"])
 			{
 				PaintLayer pl; pl.tex = util::utf8_to_iso_8859_1(l.value("tex", std::string())); pl.tiling = l.value("tiling", 2.0f);
@@ -581,7 +591,7 @@ namespace advtex
 			{
 				Atlas A; A.id = a.value("id", 0); A.file = util::utf8_to_iso_8859_1(a.value("file", std::string())); A.size = a.value("size", 512); A.cellPx = a.value("cellPx", 30);
 				A.hash = std::stoull(a.value("hash", std::string("0")), nullptr, 16); A.retired = a.value("retired", false); A.dirty = false;
-				A.slots = a["slots"].get<std::vector<int>>();
+				A.slots = a["slots"].get<std::vector<int>>(); A.blockX = a.value("bx", -1); A.blockY = a.value("by", -1);
 				P.atlases.push_back(A);
 				P.nextAtlasId = std::max(P.nextAtlasId, A.id + 1);
 			}
@@ -615,14 +625,14 @@ namespace advtex
 		if (!P.loaded) return;
 		if (P.layers.empty() && P.cells.empty() && P.atlases.empty()) { std::error_code ec; if (std::filesystem::exists(P.path, ec)) std::filesystem::remove(P.path, ec); return; }
 		nlohmann::json j;
-		j["version"] = 1; j["folder"] = P.folder; j["cellPx"] = P.cellPx; j["atlasSize"] = P.atlasSize; j["nextAtlasId"] = P.nextAtlasId; j["autoBake"] = P.autoBake;
+		j["version"] = 1; j["folder"] = P.folder; j["cellPx"] = P.cellPx; j["atlasSize"] = P.atlasSize; j["nextAtlasId"] = P.nextAtlasId; j["autoBake"] = P.autoBake; j["blockLayout"] = P.blockLayout;
 		j["layers"] = nlohmann::json::array(); j["atlases"] = nlohmann::json::array(); j["cells"] = nlohmann::json::array();
 		for (auto& l : P.layers) j["layers"].push_back({ {"tex", util::iso_8859_1_to_utf8(l.tex)}, {"tiling", l.tiling}, {"rot", l.rot}, {"flipH", l.flipH}, {"flipV", l.flipV}, {"offX", l.offX}, {"offY", l.offY}, {"ribbon", l.ribbon} });
 		for (auto& a : P.atlases)
 		{
 			std::ostringstream hs; hs << std::hex << (unsigned long long)a.hash;
 			std::string h = hs.str();
-			j["atlases"].push_back({ {"id", a.id}, {"file", util::iso_8859_1_to_utf8(a.file)}, {"size", a.size}, {"cellPx", a.cellPx}, {"hash", h}, {"retired", a.retired}, {"slots", a.slots} });
+			j["atlases"].push_back({ {"id", a.id}, {"file", util::iso_8859_1_to_utf8(a.file)}, {"size", a.size}, {"cellPx", a.cellPx}, {"hash", h}, {"retired", a.retired}, {"slots", a.slots}, {"bx", a.blockX}, {"by", a.blockY} });
 		}
 		for (auto& kv : P.cells)
 		{
