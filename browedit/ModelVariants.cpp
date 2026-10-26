@@ -147,6 +147,9 @@ namespace modelvariants
 		bool onlyUv = true, showUv = true, livePreview = true, eraseMode = false;
 		bool paint3d = false;
 		std::string stampTex;
+		std::string decalTex;
+		float decalRot = 0.0f;
+		bool decalRandom = true, decalFlip = false, decalBrightAlpha = false, decalTint = false;
 		float stampTiling = 1.0f;
 		ImVec2 pan(0, 0);
 		bool painting = false;
@@ -264,8 +267,55 @@ namespace modelvariants
 			return im.px[((size_t)y * im.w + x) * 4 + c];
 		}
 
+		// one copy of a picture (crack, sign, symbol...) centred on the point, brushSize pixels wide
+		void stampDecal(PaintTex& pt, float cx, float cy)
+		{
+			auto im = decalTex.empty() ? nullptr : advtex::getImg(decalTex);
+			if (!im) return;
+			float rot = decalRot + (decalRandom ? (float)(rand() % 3600) / 10.0f : 0.0f);
+			float cs = std::cos(glm::radians(rot)), sn = std::sin(glm::radians(rot));
+			float size = std::max(4.0f, brushSize), half = size * 0.71f;
+			int x0 = (int)std::floor(cx - half), x1 = (int)std::ceil(cx + half), y0 = (int)std::floor(cy - half), y1 = (int)std::ceil(cy + half);
+			for (int y = std::max(0, y0); y <= std::min(pt.h - 1, y1); y++)
+				for (int x = std::max(0, x0); x <= std::min(pt.w - 1, x1); x++)
+				{
+					size_t i = (size_t)y * pt.w + x;
+					if (onlyUv && !pt.uvMask[i]) continue;
+					if (isKey(&pt.orig[i * 4])) continue;
+					float dx = x + 0.5f - cx, dy = y + 0.5f - cy;
+					float u = (dx * cs + dy * sn) / size + 0.5f, v = (-dx * sn + dy * cs) / size + 0.5f;
+					if (u < 0 || u >= 1 || v < 0 || v >= 1) continue;
+					if (decalFlip) u = 1.0f - u;
+					float fx_ = u * im->w - 0.5f, fy_ = v * im->h - 0.5f;
+					int ix = (int)std::floor(fx_), iy = (int)std::floor(fy_);
+					float ax = fx_ - ix, ay = fy_ - iy;
+					float c4[4];
+					for (int c = 0; c < 4; c++)
+					{
+						auto at = [&](int xx, int yy) { xx = std::clamp(xx, 0, im->w - 1); yy = std::clamp(yy, 0, im->h - 1); return (float)im->px[((size_t)yy * im->w + xx) * 4 + c]; };
+						c4[c] = (at(ix, iy) * (1 - ax) + at(ix + 1, iy) * ax) * (1 - ay) + (at(ix, iy + 1) * (1 - ax) + at(ix + 1, iy + 1) * ax) * ay;
+					}
+					unsigned char key[3] = { (unsigned char)c4[0], (unsigned char)c4[1], (unsigned char)c4[2] };
+					float a = c4[3] / 255.0f;
+					if (isKey(key)) a = 0.0f;
+					else if (decalBrightAlpha) a *= std::clamp((0.3f * c4[0] + 0.59f * c4[1] + 0.11f * c4[2]) / 255.0f, 0.0f, 1.0f);
+					a *= brushOpacity;
+					if (a <= 0.003f) continue;
+					float col[3];
+					for (int c = 0; c < 3; c++) col[c] = decalTint ? c4[c] * brushColor[c] : c4[c];
+					unsigned char* o = &pt.overlay[i * 4];
+					float oa = o[3] / 255.0f, na = a + oa * (1 - a);
+					for (int c = 0; c < 3; c++) o[c] = (unsigned char)std::clamp((int)std::lround((col[c] * a + o[c] * oa * (1 - a)) / na), 0, 255);
+					o[3] = (unsigned char)std::lround(na * 255.0f);
+				}
+			pt.hasPaint = true;
+			compositeRange(pt, x0, y0, x1, y1);
+			pt.dirtyView = true; pt.dirtyModel = true;
+		}
+
 		void stamp(PaintTex& pt, float cx, float cy, bool erase)
 		{
+			if (brushMode == 2 && !erase) { stampDecal(pt, cx, cy); return; }
 			const float r = std::max(1.0f, brushSize * 0.5f);
 			int x0 = (int)std::floor(cx - r), x1 = (int)std::ceil(cx + r), y0 = (int)std::floor(cy - r), y1 = (int)std::ceil(cy + r);
 			const advtex::Img* st = (brushMode == 1 && !stampTex.empty()) ? advtex::getImg(stampTex) : nullptr;
@@ -310,9 +360,18 @@ namespace modelvariants
 			auto pt = getPaint(rsm, paintCur, texIndex);
 			if (!pt) { ImGui::TextUnformatted("Cannot read this texture."); return; }
 
-			ImGui::RadioButton("Colour", &brushMode, 0); ImGui::SameLine(); ImGui::RadioButton("Texture stamp", &brushMode, 1);
+			ImGui::RadioButton("Colour", &brushMode, 0); ImGui::SameLine(); ImGui::RadioButton("Texture stamp", &brushMode, 1); ImGui::SameLine(); ImGui::RadioButton("Decal (one click)", &brushMode, 2);
 			if (brushMode == 0) { ImGui::SameLine(); ImGui::ColorEdit3("##bc", brushColor, ImGuiColorEditFlags_NoInputs); }
-			else { ImGui::InputText("Stamp texture (below data\\texture)", &stampTex); ImGui::SliderFloat("Stamp scale", &stampTiling, 0.25f, 8.0f, "%.2f"); }
+			else if (brushMode == 1) { ImGui::InputText("Stamp texture (below data\\texture)", &stampTex); ImGui::SliderFloat("Stamp scale", &stampTiling, 0.25f, 8.0f, "%.2f"); }
+			else
+			{
+				ImGui::InputText("Decal picture (below data\\texture)", &decalTex);
+				ImGui::SliderFloat("Rotation", &decalRot, 0.0f, 360.0f, "%.0f deg");
+				ImGui::Checkbox("Random rotation", &decalRandom); ImGui::SameLine(); ImGui::Checkbox("Flip", &decalFlip);
+				ImGui::Checkbox("Dark parts transparent", &decalBrightAlpha); ImGui::SameLine(); ImGui::Checkbox("Tint with colour", &decalTint);
+				if (decalTint) ImGui::ColorEdit3("##dt", brushColor, ImGuiColorEditFlags_NoInputs);
+				ImGui::TextWrapped("The picture's own transparency is used (TGA / PNG), magenta counts as transparent. Size is the Size slider; one click places one copy.");
+			}
 			ImGui::SliderFloat("Size (px)", &brushSize, 2.0f, 200.0f, "%.0f");
 			ImGui::SliderFloat("Hardness", &brushHard, 0.0f, 0.95f, "%.2f");
 			ImGui::SliderFloat("Opacity", &brushOpacity, 0.05f, 1.0f, "%.2f");
@@ -358,7 +417,7 @@ namespace modelvariants
 				{
 					float dx = px - lastPaintPos.x, dy = py - lastPaintPos.y, dist = std::sqrt(dx * dx + dy * dy), step = std::max(1.0f, brushSize * 0.2f);
 					int n = (int)(dist / step);
-					for (int i = 1; i <= n; i++) stamp(*pt, lastPaintPos.x + dx / dist * step * i, lastPaintPos.y + dy / dist * step * i, erase);
+					for (int i = 1; i <= n && brushMode != 2; i++) stamp(*pt, lastPaintPos.x + dx / dist * step * i, lastPaintPos.y + dy / dist * step * i, erase);
 					if (n > 0) lastPaintPos = ImVec2(lastPaintPos.x + dx / dist * step * n, lastPaintPos.y + dy / dist * step * n);
 				}
 			}
@@ -651,9 +710,10 @@ namespace modelvariants
 				if ((lDown || rDown) && !io.WantCaptureMouse)
 				{
 					bool erase = rDown || io.KeyCtrl;
+					const bool firstPress = !painting;
 					if (!painting) { painting = true; pt->undo.push_back(pt->overlay); if (pt->undo.size() > 15) pt->undo.erase(pt->undo.begin()); }
 					paintCur = h.tex;
-					stamp(*pt, h.px.x, h.px.y, erase);
+					if (brushMode != 2 || erase || firstPress) stamp(*pt, h.px.x, h.px.y, erase);
 				}
 				else painting = false;
 				if (pt->dirtyModel && livePreview) { uploadToModelTexture(h.tex, pt->comp, pt->w, pt->h); previewActive = true; pt->dirtyModel = false; }
