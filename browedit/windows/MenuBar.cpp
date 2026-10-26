@@ -1,6 +1,7 @@
 #include <windows.h>
 #include <browedit/BrowEdit.h>
 #include <browedit/MapView.h>
+#include <browedit/ModelVariants.h>
 #include <browedit/Map.h>
 #include <browedit/Node.h>
 #include <browedit/gl/FBO.h>
@@ -151,6 +152,8 @@ void BrowEdit::menuBar()
 			saveAsMap(activeMapView->map);
 		if (activeMapView && ImGui::MenuItem("Export to folder"))
 			exportMap(activeMapView->map);
+		if (activeMapView && ImGui::MenuItem("Model variants (recolour copies)..."))
+			modelvariants::visible = true;
 		if (ImGui::BeginMenu("Recent Maps", config.recentFiles.size() > 0))
 		{
 			for (const auto& m : config.recentFiles)

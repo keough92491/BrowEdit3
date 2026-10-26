@@ -25,6 +25,7 @@
 #include <browedit/Gadget.h>
 #include <browedit/Lightmapper.h>
 #include <browedit/ModelEditor.h>
+#include <browedit/ModelVariants.h>
 #include <browedit/components/Rsw.h>
 #include <browedit/components/Gat.h>
 #include <browedit/components/Gnd.h>
@@ -314,6 +315,7 @@ void BrowEdit::run()
 			sprite::System::instance().showWindows(this);
 		if (editMode == EditMode::AdvTexture)
 			advtex::showWindow(this);
+		modelvariants::showWindow(this);
 
 		if (windowData.hotkeyEditWindowVisible)
 			showHotkeyEditorWindow();
