@@ -5,6 +5,7 @@
 #include <browedit/advtex/AdvTex.h>
 #include <Windows.h>
 #include "MapView.h"
+#include <algorithm>
 #include "Map.h"
 #include "BrowEdit.h"
 #include "Node.h"
@@ -489,6 +490,68 @@ void MapView::render(BrowEdit* browEdit)
 		auto afterRot = (Rsw::KeyFrameData<Rsw::CameraTarget>*)rsw->cinematicTracks[1].getAfterFrame(timeSelected);
 		auto beforeRot = (Rsw::KeyFrameData<Rsw::CameraTarget>*)rsw->cinematicTracks[1].getBeforeFrame(timeSelected);
 
+		// camera position: clamp before the first / after the last keyframe (the wrap-around of getBefore/AfterFrame made the camera jump)
+		{
+			std::vector<Rsw::KeyFrameData<std::pair<glm::vec3, glm::vec3>>*> pf;
+			for (auto f : rsw->cinematicTracks[0].frames)
+				if (auto p = dynamic_cast<Rsw::KeyFrameData<std::pair<glm::vec3, glm::vec3>>*>(f))
+					pf.push_back(p);
+			if (pf.size() > 0)
+			{
+				std::sort(pf.begin(), pf.end(), [](auto* x, auto* y) { return x->time < y->time; });
+				if (timeSelected >= pf.back()->time)
+					pos = pf.back()->data.first;
+				else if (timeSelected <= pf.front()->time)
+					pos = pf.front()->data.first;
+			}
+		}
+		bool smoothDone = false;
+		// smooth look-at: when every target keyframe is a "look at point", follow a Catmull-Rom curve through the points
+		// (no turn-speed lag and no jump at the keyframes)
+		{
+			std::vector<Rsw::KeyFrameData<Rsw::CameraTarget>*> tf;
+			bool allPoint = true;
+			for (auto f : rsw->cinematicTracks[1].frames)
+				if (auto p = dynamic_cast<Rsw::KeyFrameData<Rsw::CameraTarget>*>(f))
+				{
+					tf.push_back(p);
+					if (p->data.lookAt != Rsw::CameraTarget::LookAt::Point)
+						allPoint = false;
+				}
+			if (allPoint && tf.size() > 0)
+			{
+				std::sort(tf.begin(), tf.end(), [](auto* x, auto* y) { return x->time < y->time; });
+				glm::vec3 lp = tf.front()->data.point;
+				if (timeSelected >= tf.back()->time)
+					lp = tf.back()->data.point;
+				else if (timeSelected > tf.front()->time)
+				{
+					for (size_t i = 0; i + 1 < tf.size(); i++)
+					{
+						if (tf[i]->time <= timeSelected && timeSelected < tf[i + 1]->time)
+						{
+							glm::vec3 p0 = tf[i == 0 ? 0 : i - 1]->data.point, p1 = tf[i]->data.point, p2 = tf[i + 1]->data.point, p3 = tf[i + 2 < tf.size() ? i + 2 : i + 1]->data.point;
+							float dt = tf[i + 1]->time - tf[i]->time;
+							float u = dt > 0.00001f ? (timeSelected - tf[i]->time) / dt : 0.0f;
+							lp = 0.5f * ((2.0f * p1) + (-p0 + p2) * u + (2.0f * p0 - 5.0f * p1 + 4.0f * p2 - p3) * u * u + (-p0 + 3.0f * p1 - 3.0f * p2 + p3) * u * u * u);
+							break;
+						}
+					}
+				}
+				glm::vec3 d = lp - pos;
+				if (glm::length(d) > 0.0001f)
+				{
+					nodeRenderContext.viewMatrix = glm::mat4(1.0f);
+					cinematicCameraDirection = glm::conjugate(glm::quatLookAt(glm::normalize(d), glm::vec3(0, 1, 0)));
+					nodeRenderContext.viewMatrix = nodeRenderContext.viewMatrix * glm::toMat4(cinematicCameraDirection);
+					nodeRenderContext.viewMatrix = glm::translate(nodeRenderContext.viewMatrix, -pos);
+					cinematicLastCameraPosition = pos;
+					smoothDone = true;
+				}
+			}
+		}
+		if (!smoothDone)
+		{
 		nodeRenderContext.viewMatrix = glm::mat4(1.0f);
 		glm::quat targetRot = cinematicCameraDirection;
 		glm::quat lastRot = cinematicCameraDirection;
@@ -531,6 +594,7 @@ void MapView::render(BrowEdit* browEdit)
 		nodeRenderContext.viewMatrix = nodeRenderContext.viewMatrix * glm::toMat4(cinematicCameraDirection);
 		nodeRenderContext.viewMatrix = glm::translate(nodeRenderContext.viewMatrix, -pos);
 		cinematicLastCameraPosition = pos;
+		}
 	}
 	else
 	{
