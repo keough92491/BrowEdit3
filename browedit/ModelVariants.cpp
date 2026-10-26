@@ -23,6 +23,8 @@
 #include <filesystem>
 #include <iostream>
 #include <set>
+#include <array>
+#include <tuple>
 
 namespace modelvariants
 {
@@ -479,6 +481,7 @@ namespace modelvariants
 			float amount = 1.0f, threshold = 0.45f, softness = 0.25f, noise = 0.5f, noiseScale = 12.0f;
 			int dir = 0;						// side growth: 0 any, 1 north, 2 east, 3 south, 4 west
 			float height = 0.35f;				// bottom wear: how much of the model height
+			float width = 1.5f;					// edge wear / crevice dirt: how far from the edge, world units
 		} fx;
 		std::string fxResult;
 
@@ -504,6 +507,52 @@ namespace modelvariants
 			auto rr = inst ? inst->getComponent<RsmRenderer>() : nullptr;
 			if (!rr) { fxResult = "No instance of this model in the map to read its direction from."; return; }
 
+			// sharp edges of the shape (for edge wear and crevice dirt): 1 = convex, 2 = concave
+			std::vector<std::array<int, 3>> edgeFlag;
+			if (fx.type >= 3)
+			{
+				struct FaceInfo { glm::vec3 w[3]; glm::vec3 n, c; };
+				std::vector<FaceInfo> faces;
+				rsm->rootMesh->foreach([&](Rsm::Mesh* m)
+					{
+						if (m->index >= rr->renderInfo.size()) return;
+						glm::mat4 mat = rr->matrixCache * rr->renderInfo[m->index].matrix;
+						for (auto& f : m->faces)
+						{
+							FaceInfo fi;
+							for (int k = 0; k < 3; k++) fi.w[k] = glm::vec3(mat * glm::vec4(m->vertices[f.vertexIds[k]], 1));
+							glm::vec3 g = glm::cross(fi.w[1] - fi.w[0], fi.w[2] - fi.w[0]);
+							fi.n = glm::length(g) > 1e-9f ? glm::normalize(g) : glm::vec3(0, 1, 0);
+							fi.c = (fi.w[0] + fi.w[1] + fi.w[2]) / 3.0f;
+							faces.push_back(fi);
+						}
+					});
+				auto q = [](const glm::vec3& p) { return std::make_tuple((long long)std::lround(p.x * 50), (long long)std::lround(p.y * 50), (long long)std::lround(p.z * 50)); };
+				typedef std::tuple<long long, long long, long long> Q;
+				std::map<std::pair<Q, Q>, std::vector<int>> edges;
+				auto ekey = [&](const glm::vec3& a, const glm::vec3& b) { Q qa = q(a), qb = q(b); return qa < qb ? std::make_pair(qa, qb) : std::make_pair(qb, qa); };
+				for (int i = 0; i < (int)faces.size(); i++)
+					for (int k = 0; k < 3; k++) edges[ekey(faces[i].w[k], faces[i].w[(k + 1) % 3])].push_back(i);
+				float cosT = std::cos(glm::radians(15.0f + fx.threshold * 70.0f));
+				edgeFlag.assign(faces.size(), { 0, 0, 0 });
+				for (int i = 0; i < (int)faces.size(); i++)
+					for (int k = 0; k < 3; k++)
+					{
+						auto& lst = edges[ekey(faces[i].w[k], faces[i].w[(k + 1) % 3])];
+						int best = 0;
+						for (int j : lst)
+						{
+							if (j == i) continue;
+							if (glm::dot(faces[i].n, faces[j].n) > cosT) continue;
+							// the other face's middle is behind this face's plane on a convex edge
+							int kind = glm::dot(faces[j].c - faces[i].c, faces[i].n) < 0 ? 1 : 2;
+							best = best == 0 ? kind : best;
+						}
+						edgeFlag[i][k] = best;
+					}
+			}
+			int faceCounter = -1;
+
 			// world height range
 			float ymin = 1e30f, ymax = -1e30f;
 			rsm->rootMesh->foreach([&](Rsm::Mesh* m)
@@ -526,6 +575,7 @@ namespace modelvariants
 					glm::mat3 nmat = glm::transpose(glm::inverse(glm::mat3(mat)));
 					for (auto& f : m->faces)
 					{
+						faceCounter++;
 						if (f.texId < 0 || f.texId >= (int)m->textures.size()) continue;
 						int ti = m->textures[f.texId];
 						if (ti < 0 || ti >= (int)rsm->textures.size()) continue;
@@ -570,6 +620,21 @@ namespace modelvariants
 									float vertical = 1.0f - std::fabs(n.y);			// 1 on walls
 									float facing = glm::length(side) < 0.5f ? 1.0f : std::clamp(glm::dot(glm::normalize(glm::vec3(n.x, 0, n.z) + glm::vec3(1e-6f)), side) * 0.5f + 0.5f, 0.0f, 1.0f);
 									w = sstep(fx.threshold - fx.softness * 0.5f, fx.threshold + fx.softness * 0.5f, vertical * facing + nz * fx.noise);
+								}
+								else if (fx.type >= 3)
+								{
+									float lb[3] = { l1, l2, l3 };
+									int want = fx.type == 3 ? 1 : 2;
+									float area2 = glm::length(glm::cross(wv[1] - wv[0], wv[2] - wv[0]));
+									for (int k = 0; k < 3; k++)
+									{
+										if (faceCounter < 0 || faceCounter >= (int)edgeFlag.size() || edgeFlag[faceCounter][k] != want) continue;
+										float elen = glm::length(wv[(k + 1) % 3] - wv[k]);
+										if (elen < 1e-6f) continue;
+										float dist = lb[(k + 2) % 3] * (area2 / elen);
+										float wd = fx.width;
+										w = std::max(w, 1.0f - sstep(0.0f, wd, dist + nz * fx.noise * wd));
+									}
 								}
 								else
 								{
@@ -801,20 +866,23 @@ namespace modelvariants
 		ImGui::Separator();
 		if (ImGui::CollapsingHeader("Automatic effects (snow, growth, wear)"))
 		{
-			const char* names[] = { "Snow on top", "Growth on the sides (moss, vines)", "Wear / dirt at the bottom" };
+			const char* names[] = { "Snow on top", "Growth on the sides (moss, vines)", "Wear / dirt at the bottom", "Edge wear (worn convex edges)", "Crevice dirt (inner corners)" };
 			int before = fx.type;
-			ImGui::Combo("Effect", &fx.type, names, 3);
+			ImGui::Combo("Effect", &fx.type, names, 5);
 			if (before != fx.type)
 			{
 				if (fx.type == 0) { fx.colour[0] = 0.95f; fx.colour[1] = 0.97f; fx.colour[2] = 1.0f; fx.threshold = 0.45f; }
 				if (fx.type == 1) { fx.colour[0] = 0.25f; fx.colour[1] = 0.45f; fx.colour[2] = 0.15f; fx.threshold = 0.5f; }
 				if (fx.type == 2) { fx.colour[0] = 0.25f; fx.colour[1] = 0.18f; fx.colour[2] = 0.12f; fx.height = 0.3f; }
+				if (fx.type == 3) { fx.colour[0] = 0.82f; fx.colour[1] = 0.78f; fx.colour[2] = 0.68f; fx.threshold = 0.4f; fx.width = 1.2f; }
+				if (fx.type == 4) { fx.colour[0] = 0.08f; fx.colour[1] = 0.06f; fx.colour[2] = 0.04f; fx.threshold = 0.4f; fx.width = 2.0f; }
 			}
 			ImGui::ColorEdit3("Colour", fx.colour, ImGuiColorEditFlags_NoInputs);
 			ImGui::InputText("or stamp texture (below data\\texture)", &fx.stamp);
 			ImGui::SliderFloat("Amount", &fx.amount, 0.05f, 1.0f, "%.2f");
 			if (fx.type < 2) ImGui::SliderFloat("Threshold", &fx.threshold, 0.0f, 1.0f, "%.2f");
-			else ImGui::SliderFloat("Height covered", &fx.height, 0.05f, 1.0f, "%.2f");
+			else if (fx.type == 2) ImGui::SliderFloat("Height covered", &fx.height, 0.05f, 1.0f, "%.2f");
+			else { ImGui::SliderFloat("Sharpness (how sharp an edge counts)", &fx.threshold, 0.0f, 1.0f, "%.2f"); ImGui::SliderFloat("Reach from the edge (world units)", &fx.width, 0.2f, 8.0f, "%.1f"); }
 			ImGui::SliderFloat("Soft edge", &fx.softness, 0.02f, 1.0f, "%.2f");
 			ImGui::SliderFloat("Noise", &fx.noise, 0.0f, 1.0f, "%.2f");
 			ImGui::SliderFloat("Noise size (px)", &fx.noiseScale, 2.0f, 64.0f, "%.0f");
