@@ -13,6 +13,7 @@
 #include <stb/stb_image_write.h>
 
 #include <set>
+#include <memory>
 #include <map>
 #include <queue>
 #include <functional>
@@ -49,6 +50,7 @@ namespace
 		bool useViewCenter = false;
 		float pacing = 70;		// slow-motion strength (percent) for field / city / dungeon
 		int startSide = 0;		// 0 auto, 1 from west, 2 from east, 3 from north, 4 from south
+		bool loop = false;		// seamless loop: the end of the path returns to the start
 		int look = 0;			// 0 ahead, 1 sideways left, 2 sideways right, 3 looking back, 4 focus on spots, 5 pan sweep
 	};
 
@@ -317,6 +319,25 @@ namespace
 		const float Ls = (std::abs(dirV.x) > 0.5f ? spanZ : spanX) * 0.5f;
 		bool topDown = false;
 
+		// closed "racetrack" for straight presets: out along a -> b, back along a parallel line, with rounded corners
+		auto makeRace = [&](glm::vec2 a, glm::vec2 b, glm::vec2 lateral)
+		{
+			auto pl = std::make_shared<Poly>();
+			std::vector<glm::vec2> corners = { a - lateral, b - lateral, b + lateral, a + lateral };
+			for (size_t k = 0; k < corners.size(); k++)
+			{
+				glm::vec2 pv = corners[(k + 3) % 4], cu = corners[k], nx = corners[(k + 1) % 4];
+				pl->pts.push_back(cu + (pv - cu) * 0.15f);
+				pl->pts.push_back(cu);
+				pl->pts.push_back(cu + (nx - cu) * 0.15f);
+			}
+			pl->pts.push_back(pl->pts.front());
+			pl->build();
+			pl->smooth(1, 2);
+			pl->pts.back() = pl->pts.front();
+			pl->build();
+			return std::function<glm::vec2(float)>([pl, x0, x1, z0, z1](float u) { return glm::clamp(pl->at(u), glm::vec2(x0, z0), glm::vec2(x1, z1)); });
+		};
 		struct Poi { float s; float w; glm::vec2 pos; };
 		std::vector<Poi> pois;
 		bool pace = false, cornerSlow = false, aimAtPoi = false;
@@ -427,6 +448,7 @@ namespace
 					spots.erase(spots.begin() + best);
 				}
 				for (auto& o : ordered) poly.pts.push_back(o.second);
+				if (gp.loop) { poly.pts.push_back(ordered[0].second); loop = true; }
 				poly.build();
 				addPois(ordered);
 				poly.smooth(1, 1);
@@ -473,6 +495,7 @@ namespace
 			std::vector<glm::vec2> wpf;
 			for (auto& ch : chosen) wpf.push_back(glm::vec2(ch));
 			wpf = orderWaypoints(wpf);
+			if (gp.loop && wpf.size() > 1) wpf.push_back(wpf[0]);		// walk back to where we started
 			std::vector<glm::vec2> route;
 			std::vector<size_t> routeWp;
 			std::vector<int> prev((size_t)gw * gh);
@@ -516,6 +539,8 @@ namespace
 			{
 				poly.pts = route;
 				poly.build();
+				if (gp.loop && !routeWp.empty()) routeWp.pop_back();
+				if (gp.loop) loop = true;
 				for (auto idx : routeWp)
 					pois.push_back({ poly.cum[idx] / glm::max(0.0001f, poly.cum.back()), 1.0f, route[idx] });
 				poly.smooth(3, 2);
@@ -541,6 +566,7 @@ namespace
 			if (!gp.clockwise) std::swap(a.x, b.x);
 			xzAt = [=](float u) { return glm::mix(a, b, u); };
 			hAt = [](float u) { return 1.0f - 0.3f * u; };
+			if (gp.loop) { glm::vec2 lt = glm::normalize(glm::vec2(-(b - a).y, (b - a).x)) * 0.12f * glm::length(b - a); xzAt = makeRace(a, b, lt); hAt = [](float) { return 1.0f; }; loop = true; }
 		}
 		else if (preset == 5)	// reveal: pull in on the focus point
 		{
@@ -569,6 +595,7 @@ namespace
 		{
 			float off = preset == 10 ? 0.2f * Ls : 0.0f;
 			xzAt = [=](float u) { return clampXZ(c + dirV * ((u - 0.5f) * 2.0f * Lh) + latV * off); };
+			if (gp.loop) { xzAt = makeRace(c - dirV * Lh * 0.9f + latV * off, c + dirV * Lh * 0.9f + latV * off, latV * (0.3f * Ls)); loop = true; }
 			if (preset == 9) { topDown = true; groundRadius = 60.0f; }
 			if (preset == 10) groundRadius = 20.0f;
 			if (preset == 8) hAt = [](float) { return 0.9f; };
@@ -584,6 +611,7 @@ namespace
 				std::rotate(spots.begin(), spots.begin() + startIndex(spots), spots.end());
 				poly.pts.clear();
 				for (auto& o : spots) poly.pts.push_back(o.second);
+				if (gp.loop) { poly.pts.push_back(spots[0].second); loop = true; }
 				poly.build();
 				addPois(spots);
 				poly.smooth(1, 1);
@@ -600,10 +628,18 @@ namespace
 			glm::vec2 lat = latV;
 			float L = Lh * 2.0f, LsS = Ls * 2.0f;
 			xzAt = [=](float u) { return clampXZ(c + axis * ((u - 0.5f) * L) + lat * (std::sin(u * 6.2831853f) * 0.18f * LsS)); };
+			if (gp.loop) { xzAt = makeRace(c - axis * L * 0.45f, c + axis * L * 0.45f, lat * (0.3f * LsS * 0.5f)); loop = true; }
 			hAt = [](float u) { return 1.4f - 0.5f * u; };
 			constTarget = false; loop = false;
 		}
 
+		if (gp.loop && constTarget && !loop)		// in and back out
+		{
+			auto b0 = xzAt; auto h0 = hAt;
+			xzAt = [b0](float u) { return b0((1.0f - std::cos(6.2831853f * u)) * 0.5f); };
+			hAt = [h0](float u) { return h0((1.0f - std::cos(6.2831853f * u)) * 0.5f); };
+			loop = true;
+		}
 		// slow-motion / fast mix: remap time so the camera crawls near points of interest and in tight turns, and speeds up in between
 		std::function<float(float)> slowAt = [](float) { return 0.0f; };
 		std::function<float(float)> camY;		// smooth camera altitude (not used for the dungeon, which hugs the floor)
@@ -700,10 +736,16 @@ namespace
 				yr[k] = groundMax(gnd, xz.x, xz.y, glm::max(groundRadius, 25.0f), cg) + gp.height * hAt(tau);
 			}
 			int hw = glm::max(2, (int)std::round(K * glm::clamp(3.0f / gp.duration, 0.03f, 0.2f)));
+			if (loop) yr[K] = yr[0];
+			auto wrapI = [&](int j) { return loop ? ((j % K) + K) % K : glm::clamp(j, 0, K); };
 			for (int k = 0; k <= K; k++)
 			{
 				float m = -1e30f;
-				for (int j = glm::max(0, k - 2 * hw); j <= glm::min(K, k + 2 * hw); j++) m = glm::max(m, yr[j]);
+				for (int j = k - 2 * hw; j <= k + 2 * hw; j++)
+				{
+					if (!loop && (j < 0 || j > K)) continue;
+					m = glm::max(m, yr[wrapI(j)]);
+				}
 				env[k] = m;
 			}
 			for (int pass = 0; pass < 2; pass++)
@@ -711,9 +753,14 @@ namespace
 				for (int k = 0; k <= K; k++)
 				{
 					float sum = 0; int n = 0;
-					for (int j = glm::max(0, k - hw); j <= glm::min(K, k + hw); j++) { sum += env[j]; n++; }
+					for (int j = k - hw; j <= k + hw; j++)
+					{
+						if (!loop && (j < 0 || j > K)) continue;
+						sum += env[wrapI(j)]; n++;
+					}
 					sm[k] = sum / n;
 				}
+				if (loop) sm[K] = sm[0];
 				env = sm;
 			}
 			camY = [sm, K](float tau)
@@ -756,22 +803,23 @@ namespace
 			{
 				float u = j / (float)M;
 				glm::vec2 here = xzAt(u);
-				glm::vec2 hd = xzAt(glm::min(1.0f, u + 0.03f)) - xzAt(glm::max(0.0f, u - 0.03f));
+				auto wrapU = [&](float v) { return loop ? v - std::floor(v) : glm::clamp(v, 0.0f, 1.0f); };
+				glm::vec2 hd = xzAt(wrapU(u + 0.03f)) - xzAt(wrapU(u - 0.03f));
 				hd = glm::length(hd) > 0.001f ? glm::normalize(hd) : dirV;
-				glm::vec2 q = xzAt(glm::min(1.0f, u + la));
+				glm::vec2 q = xzAt(wrapU(u + la));
 				glm::vec3 tp(q.x, groundAt(gnd, q.x, q.y, cg) + gp.height * 0.2f, q.y);
 				// gentle, slowly varying downward pitch (a few degrees of drift) instead of chasing the terrain
-				const float pitch = glm::radians(20.0f + 4.0f * std::sin(0.15f * gp.duration * u));
+				const float pitch = glm::radians(20.0f + 4.0f * std::sin(6.2831853f * u));
 				if (camY)
 					tp.y = camY(u) - glm::max(40.0f, glm::distance(q, here)) * std::tan(pitch);
 				if (topDown)
 				{
-					glm::vec2 q2 = xzAt(glm::min(1.0f, u + 0.01f));
+					glm::vec2 q2 = xzAt(wrapU(u + 0.01f));
 					tp = glm::vec3(q2.x, groundAt(gnd, q2.x, q2.y, cg), q2.y);
 				}
 				else if (gp.look == 0)
 				{
-					if (u + la > 1.0f)		// near the end keep looking along the heading
+					if (!loop && u + la > 1.0f)		// near the end keep looking along the heading
 						tp = glm::vec3(here.x + hd.x * 60.0f, tp.y, here.y + hd.y * 60.0f);
 					if (aimAtPoi && !pois.empty())		// drift the view towards the spot we are passing
 					{
@@ -1094,6 +1142,7 @@ void BrowEdit::showCinematicModeWindow()
 			ImGui::Combo("Camera looks", &gp.look, "Ahead\0Sideways (left)\0Sideways (right)\0Looking back\0Circle the spots\0Slow pan left to right\0");
 		}
 		ImGui::SliderFloat("Keys per second", &gp.keysPerSec, 0.2f, 2.0f, "%.2f");
+		ImGui::Checkbox("Loop (seamless, ends where it starts)", &gp.loop);
 		ImGui::Checkbox("Clockwise / forward", &gp.clockwise);
 		ImGui::Checkbox("Use the editor view centre as focus", &gp.useViewCenter);
 		if (!resultMsg.empty())

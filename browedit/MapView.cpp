@@ -521,6 +521,7 @@ void MapView::render(BrowEdit* browEdit)
 			if (allPoint && tf.size() > 0)
 			{
 				std::sort(tf.begin(), tf.end(), [](auto* x, auto* y) { return x->time < y->time; });
+				const bool periodic = tf.size() >= 4 && glm::distance(tf.front()->data.point, tf.back()->data.point) < 0.5f;
 				glm::vec3 lp = tf.front()->data.point;
 				if (timeSelected >= tf.back()->time)
 					lp = tf.back()->data.point;
@@ -532,6 +533,12 @@ void MapView::render(BrowEdit* browEdit)
 						{
 							// cubic Hermite with velocities that account for uneven keyframe spacing, so adding keys never makes it bumpy
 							auto vel = [&](size_t k) {
+								if (periodic && (k == 0 || k + 1 == tf.size()))		// looping cinematic: the last key is the first key again
+								{
+									size_t n = tf.size();
+									float dtt = (tf[1]->time - tf[0]->time) + (tf[n - 1]->time - tf[n - 2]->time);
+									return dtt > 0.00001f ? (tf[1]->data.point - tf[n - 2]->data.point) / dtt : glm::vec3(0.0f);
+								}
 								size_t a = k == 0 ? 0 : k - 1, b = k + 1 < tf.size() ? k + 1 : k;
 								float dtt = tf[b]->time - tf[a]->time;
 								return dtt > 0.00001f ? (tf[b]->data.point - tf[a]->data.point) / dtt : glm::vec3(0.0f);
