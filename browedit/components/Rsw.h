@@ -156,6 +156,11 @@ public:
 		bool additiveShadow = true;
 		bool ignoreBacksideTexture = true;
 		bool runOnGpu = true;
+		// soft shadows (not saved with the map)
+		bool softShadows = false;
+		int softSamples = 24;
+		float softAngle = 3.0f;		// sun size in degrees
+		float lightRadius = 4.0f;	// point and spot lights, world units
 		glm::ivec2 rangeX;
 		glm::ivec2 rangeY;
 
