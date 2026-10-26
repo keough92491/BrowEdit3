@@ -10,6 +10,8 @@
 #include <browedit/advtex/AdvTex.h>
 #include <browedit/util/Util.h>
 #include <browedit/util/ResourceManager.h>
+#include <browedit/util/FileIO.h>
+#include <functional>
 #include <browedit/gl/Texture.h>
 #include <browedit/math/Ray.h>
 #include <browedit/components/RsmRenderer.h>
@@ -49,6 +51,103 @@ namespace modelvariants
 		std::string result;
 		struct Thumb { gl::Texture* before = nullptr; gl::Texture* after = nullptr; };
 		std::map<std::string, Thumb> thumbs;
+
+		BrowEdit* gBe = nullptr;
+		std::string lowerPk(std::string s) { for (auto& c : s) c = (char)tolower((unsigned char)c); return s; }
+
+		// text field + "Pick" button that opens a thumbnail browser of data\texture (like the texture picker); value is relative to data\texture
+		void texturePicker(const char* label, std::string& value)
+		{
+			ImGui::PushID(label);
+			ImGui::SetNextItemWidth(ImGui::GetContentRegionAvail().x - 150);
+			ImGui::InputText(label, &value);
+			ImGui::SameLine();
+			if (ImGui::Button("Pick...")) ImGui::OpenPopup("Pick a texture");
+			if (!value.empty())
+			{
+				if (auto t = util::ResourceManager<gl::Texture>::load("data\\texture\\" + value))
+					if (t->loaded) { ImGui::SameLine(); ImGui::Image((ImTextureID)(intptr_t)t->id(), ImVec2(24, 24)); }
+			}
+			ImGui::SetNextWindowSize(ImVec2(820, 560), ImGuiCond_Appearing);
+			if (ImGui::BeginPopupModal("Pick a texture", nullptr, ImGuiWindowFlags_NoSavedSettings))
+			{
+				static util::FileIO::Node* node = nullptr;
+				static std::string filter;
+				ImGui::InputText("Filter (tags or name)", &filter);
+				ImGui::SameLine();
+				if (ImGui::Button("Cancel")) ImGui::CloseCurrentPopup();
+				std::function<void(util::FileIO::Node*)> tree;
+				tree = [&](util::FileIO::Node* n)
+				{
+					for (auto f : n->directories)
+					{
+						int flags = ImGuiTreeNodeFlags_OpenOnDoubleClick;
+						if (f.second->directories.size() == 0) flags |= ImGuiTreeNodeFlags_Bullet;
+						if (f.second == node) flags |= ImGuiTreeNodeFlags_Selected;
+						if (ImGui::TreeNodeEx(f.second->name.c_str(), flags)) { tree(f.second); ImGui::TreePop(); }
+						if (ImGui::IsItemClicked()) node = f.second;
+					}
+				};
+				ImGui::BeginChild("left", ImVec2(230, 0), true);
+				if (auto root = util::FileIO::directoryNode("data\\texture\\"))
+				{
+					if (ImGui::TreeNodeEx("Textures", ImGuiTreeNodeFlags_DefaultOpen | ImGuiTreeNodeFlags_OpenOnDoubleClick)) { if (ImGui::IsItemClicked()) node = root; tree(root); ImGui::TreePop(); }
+					else if (ImGui::IsItemClicked()) node = root;
+				}
+				ImGui::EndChild();
+				ImGui::SameLine();
+				ImGui::BeginChild("right", ImVec2(0, 0), true);
+				auto isImage = [](const std::string& f) { std::string l = lowerPk(f); return l.find(".bmp") != std::string::npos || l.find(".tga") != std::string::npos || l.find(".png") != std::string::npos || l.find(".jpg") != std::string::npos; };
+				float x2 = ImGui::GetWindowPos().x + ImGui::GetWindowContentRegionMax().x;
+				bool chosen = false;
+				auto box = [&](const std::string& fileIso, const std::string& pathIso)
+				{
+					ImVec2 th(100, 100);
+					if (ImGui::BeginChild(pathIso.c_str(), ImVec2(th.x + 10, th.y + 50), true, ImGuiWindowFlags_NoScrollbar))
+					{
+						auto& cache = gBe->windowData.textureManageWindowCache;
+						if (cache.find(pathIso) == cache.end()) cache[pathIso] = util::ResourceManager<gl::Texture>::load(pathIso);
+						ImTextureID tex = cache[pathIso]->loaded ? (ImTextureID)(long long)cache[pathIso]->id() : 0;
+						if (ImGui::ImageButtonEx(ImGui::GetID(pathIso.c_str()), tex, th, ImVec2(0, 0), ImVec2(1, 1), ImVec2(0, 0), ImVec4(0, 0, 0, 0), ImVec4(1, 1, 1, 1)))
+						{
+							value = pathIso.size() > 13 ? pathIso.substr(13) : pathIso;		// below data\texture
+							chosen = true;
+						}
+						ImGui::Text("%s", util::iso_8859_1_to_utf8(fileIso).c_str());
+					}
+					ImGui::EndChild();
+					if (ImGui::GetItemRectMax().x + ImGui::GetStyle().ItemSpacing.x + th.x + 10 < x2) ImGui::SameLine();
+				};
+				if (filter.empty())
+				{
+					if (node)
+						for (auto file : node->files)
+						{
+							if (!isImage(file)) continue;
+							std::string fileIso = util::utf8_to_iso_8859_1(file), path = fileIso;
+							auto n = node;
+							while (n) { if (n->name != "") path = util::utf8_to_iso_8859_1(n->name) + "\\" + path; n = n->parent; }
+							box(fileIso, path);
+						}
+				}
+				else if (gBe)
+				{
+					std::string f = lowerPk(filter);
+					int shown = 0;
+					for (auto& kv : gBe->tagListReverse)
+					{
+						if (shown > 300) break;
+						bool match = lowerPk(kv.first).find(f) != std::string::npos;
+						for (auto& tg : kv.second) if (lowerPk(tg).find(f) != std::string::npos) match = true;
+						if (match && isImage(kv.first)) { auto sl = kv.first.find_last_of("\\/"); box(sl == std::string::npos ? kv.first : kv.first.substr(sl + 1), kv.first); shown++; }
+					}
+				}
+				ImGui::EndChild();
+				if (chosen) ImGui::CloseCurrentPopup();
+				ImGui::EndPopup();
+			}
+			ImGui::PopID();
+		}
 
 		bool isKey(const unsigned char* p) { return p[0] > 240 && p[1] < 16 && p[2] > 240; }		// the client's transparent magenta
 
@@ -364,10 +463,10 @@ namespace modelvariants
 
 			ImGui::RadioButton("Colour", &brushMode, 0); ImGui::SameLine(); ImGui::RadioButton("Texture stamp", &brushMode, 1); ImGui::SameLine(); ImGui::RadioButton("Decal (one click)", &brushMode, 2);
 			if (brushMode == 0) { ImGui::SameLine(); ImGui::ColorEdit3("##bc", brushColor, ImGuiColorEditFlags_NoInputs); }
-			else if (brushMode == 1) { ImGui::InputText("Stamp texture (below data\\texture)", &stampTex); ImGui::SliderFloat("Stamp scale", &stampTiling, 0.25f, 8.0f, "%.2f"); }
+			else if (brushMode == 1) { texturePicker("Stamp texture", stampTex); ImGui::SliderFloat("Stamp scale", &stampTiling, 0.25f, 8.0f, "%.2f"); }
 			else
 			{
-				ImGui::InputText("Decal picture (below data\\texture)", &decalTex);
+				texturePicker("Decal picture", decalTex);
 				ImGui::SliderFloat("Rotation", &decalRot, 0.0f, 360.0f, "%.0f deg");
 				ImGui::Checkbox("Random rotation", &decalRandom); ImGui::SameLine(); ImGui::Checkbox("Flip", &decalFlip);
 				ImGui::Checkbox("Dark parts transparent", &decalBrightAlpha); ImGui::SameLine(); ImGui::Checkbox("Tint with colour", &decalTint);
@@ -790,6 +889,7 @@ namespace modelvariants
 
 	void showWindow(BrowEdit* be)
 	{
+		gBe = be;
 		if (!visible) { if (previewActive) restorePreview(); return; }
 		ImGui::SetNextWindowSize(ImVec2(520, 640), ImGuiCond_FirstUseEver);
 		if (!ImGui::Begin("Model variants", &visible)) { ImGui::End(); return; }
@@ -878,7 +978,7 @@ namespace modelvariants
 				if (fx.type == 4) { fx.colour[0] = 0.08f; fx.colour[1] = 0.06f; fx.colour[2] = 0.04f; fx.threshold = 0.4f; fx.width = 2.0f; }
 			}
 			ImGui::ColorEdit3("Colour", fx.colour, ImGuiColorEditFlags_NoInputs);
-			ImGui::InputText("or stamp texture (below data\\texture)", &fx.stamp);
+			texturePicker("or stamp texture", fx.stamp);
 			ImGui::SliderFloat("Amount", &fx.amount, 0.05f, 1.0f, "%.2f");
 			if (fx.type < 2) ImGui::SliderFloat("Threshold", &fx.threshold, 0.0f, 1.0f, "%.2f");
 			else if (fx.type == 2) ImGui::SliderFloat("Height covered", &fx.height, 0.05f, 1.0f, "%.2f");
