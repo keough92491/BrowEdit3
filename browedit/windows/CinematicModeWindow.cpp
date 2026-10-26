@@ -23,6 +23,7 @@
 #include <browedit/components/Gat.h>
 #include <browedit/math/HermiteCurve.h>
 #include <browedit/math/Ray.h>
+#include <browedit/CinematicDraw.h>
 
 namespace
 {
@@ -284,7 +285,7 @@ namespace
 	}
 
 	// slow-motion / fast mix along a polyline: returns the remap from time (0..1) to path position (0..1)
-	std::function<float(float)> buildRemap(const Poly& poly, const std::vector<float>& poiS, float strength, float slowSpeed, float fastSpeed)
+	std::function<float(float)> buildRemap(const Poly& poly, const std::vector<float>& poiS, float strength, float slowSpeed, float fastSpeed, bool corners = true)
 	{
 		const int ST = 600;
 		std::vector<float> mask(ST + 1, 0.0f), tc(ST + 1, 0.0f);
@@ -298,7 +299,7 @@ namespace
 			}
 			glm::vec2 a = poly.at(glm::max(0.0f, sp - 0.012f)), b = poly.at(sp), c2 = poly.at(glm::min(1.0f, sp + 0.012f));
 			glm::vec2 v1 = b - a, v2 = c2 - b;
-			if (glm::length(v1) > 0.01f && glm::length(v2) > 0.01f)
+			if (corners && glm::length(v1) > 0.01f && glm::length(v2) > 0.01f)
 			{
 				float ang = std::acos(glm::clamp(glm::dot(glm::normalize(v1), glm::normalize(v2)), -1.0f, 1.0f));
 				v = glm::max(v, glm::clamp(ang / 0.9f, 0.0f, 1.0f) * 0.7f);
@@ -699,6 +700,167 @@ namespace
 		}
 		rsw->cinematicLength = gp.duration;
 		return true;
+	}
+
+
+	// Builds the cinematic from the path drawn on the map: the camera follows the line and turns with it
+	std::string generateFromPath(Rsw* rsw, MapView* mv)
+	{
+		using namespace cinedraw;
+		if (points.size() < 2)
+			return "Draw at least two points first.";
+		auto gnd = mv->map->rootNode->getComponent<Gnd>();
+		const bool loop = closedLoop && points.size() >= 3;
+		std::vector<int> ctrl;
+		auto C = curve(18, loop, &ctrl);
+		const int n = (int)C.size();
+		Poly poly;
+		for (auto& c : C) poly.pts.push_back(glm::vec2(c.x, c.z));
+		poly.build();
+		const float total = glm::max(1.0f, poly.cum.back());
+		const float cg = points[0].pos.y;
+
+		// altitude: the drawn heights, kept above the ground and averaged so it stays calm
+		std::vector<float> y(n), sm(n);
+		for (int i = 0; i < n; i++)
+			y[i] = glm::max(C[i].y, groundMax(gnd, C[i].x, C[i].z, 10.0f, cg) + 6.0f);
+		for (int pass = 0; pass < 2; pass++)
+		{
+			for (int i = 0; i < n; i++)
+			{
+				float sum = 0; int cnt = 0;
+				for (int j = i - 5; j <= i + 5; j++)
+				{
+					int jj = loop ? ((j % (n - 1)) + (n - 1)) % (n - 1) : j;
+					if (jj < 0 || jj >= n) continue;
+					sum += y[jj]; cnt++;
+				}
+				sm[i] = sum / cnt;
+			}
+			y = sm;
+			if (loop) y[n - 1] = y[0];
+		}
+
+		std::vector<float> ctrlS;
+		std::vector<float> poiS;
+		for (size_t j = 0; j < ctrl.size() && j < points.size(); j++)
+		{
+			float sj = poly.cum[glm::min(ctrl[j], n - 1)] / total;
+			ctrlS.push_back(sj);
+			if (points[j].hasFocus || points[j].look >= 0 || points[j].height >= 0)
+				poiS.push_back(sj);
+		}
+		auto remap = buildRemap(poly, poiS, glm::clamp(pacing / 100.0f, 0.0f, 1.0f), 0.4f, 1.5f, slowCorners);
+
+		// look angle at each control point (0 ahead, +90 left, -90 right, 180 back), unwrapped so turns take the short way
+		auto modeAngle = [](int m) { return m == 1 ? 1.5707963f : m == 2 ? -1.5707963f : m == 3 ? 3.14159265f : 0.0f; };
+		std::vector<float> A;
+		for (size_t j = 0; j < points.size(); j++)
+		{
+			int m = points[j].look >= 0 ? points[j].look : (defLook == 5 ? 0 : defLook);
+			float a = modeAngle(m);
+			if (!A.empty())
+				while (a - A.back() > 3.14159265f) a -= 6.2831853f;
+			if (!A.empty())
+				while (a - A.back() < -3.14159265f) a += 6.2831853f;
+			A.push_back(a);
+		}
+		std::vector<float> sA = ctrlS;
+		if (loop)
+		{
+			float a0 = A[0];
+			while (a0 - A.back() > 3.14159265f) a0 -= 6.2831853f;
+			while (a0 - A.back() < -3.14159265f) a0 += 6.2831853f;
+			A.push_back(a0);
+			sA.push_back(1.0f);
+		}
+		auto smooth01 = [](float u) { u = glm::clamp(u, 0.0f, 1.0f); return u * u * (3 - 2 * u); };
+		auto angleAt = [&](float s)
+		{
+			if (s <= sA.front()) return A.front();
+			for (size_t j = 0; j + 1 < sA.size() && j + 1 < A.size(); j++)
+				if (s < sA[j + 1])
+					return glm::mix(A[j], A[j + 1], smooth01((s - sA[j]) / glm::max(0.0001f, sA[j + 1] - sA[j])));
+			return A.back();
+		};
+		auto rot2 = [](glm::vec2 v, float a) { return glm::vec2(v.x * std::cos(a) - v.y * std::sin(a), v.x * std::sin(a) + v.y * std::cos(a)); };
+		auto altitude = [&](float s) { float f = glm::clamp(s, 0.0f, 1.0f) * (n - 1); int k0 = glm::min(n - 2, (int)f); return glm::mix(y[k0], y[k0 + 1], f - k0); };
+		const float lookAheadS = glm::clamp(glm::max(60.0f, 3.0f * defaultHeight) / total, 0.01f, 0.3f);
+		const float sigmaS = 150.0f / total;
+
+		auto sample = [&](float tau, glm::vec3& pos, glm::vec3& tgt)
+		{
+			float s = remap(tau);
+			glm::vec2 here = poly.at(s);
+			pos = glm::vec3(here.x, altitude(s), here.y);
+			float sa = loop ? s + lookAheadS : glm::min(1.0f, s + lookAheadS);
+			if (loop) sa -= std::floor(sa);
+			glm::vec2 ahead = poly.at(sa);
+			glm::vec2 hd = poly.at(glm::min(1.0f, s + 0.01f)) - poly.at(glm::max(0.0f, s - 0.01f));
+			hd = glm::length(hd) > 0.0001f ? glm::normalize(hd) : glm::vec2(1, 0);
+			glm::vec2 dir = ahead - here;
+			float dl = glm::length(dir);
+			if (dl < 1.0f) { dir = hd * 40.0f; dl = 40.0f; }
+			float ang = angleAt(s);
+			if (defLook == 5)
+				ang += loop ? std::sin(6.2831853f * tau) : (tau - 0.5f) * 2.3f;
+			glm::vec2 d2 = rot2(dir / dl, ang) * glm::max(40.0f, dl);
+			float pitch = glm::radians(pitchDeg + 3.0f * std::sin(6.2831853f * tau));
+			tgt = glm::vec3(here.x + d2.x, pos.y - glm::length(d2) * std::tan(pitch), here.y + d2.y);
+			// look at the focus point of a nearby control point
+			float bestW = 0; int bestJ = -1;
+			for (size_t j = 0; j < ctrlS.size() && j < points.size(); j++)
+			{
+				if (!points[j].hasFocus) continue;
+				float d = std::abs(s - ctrlS[j]);
+				if (loop) d = glm::min(d, 1.0f - d);
+				float w = std::exp(-(d / sigmaS) * (d / sigmaS));
+				if (w > bestW) { bestW = w; bestJ = (int)j; }
+			}
+			if (bestJ >= 0)
+				tgt = glm::mix(tgt, points[bestJ].focus, smooth01(bestW));
+		};
+
+		const int N = glm::max(4, (int)std::round(duration * keysPerSec));
+		std::vector<glm::vec3> P(N + 1);
+		std::vector<float> T(N + 1);
+		for (int i = 0; i <= N; i++)
+		{
+			glm::vec3 t;
+			T[i] = duration * i / (float)N;
+			sample(i / (float)N, P[i], t);
+		}
+		if (loop) P[N] = P[0];
+		auto& posTrack = rsw->cinematicTracks[0];
+		auto& tgtTrack = rsw->cinematicTracks[1];
+		posTrack.frames.clear();
+		tgtTrack.frames.clear();
+		for (int i = 0; i <= N; i++)
+		{
+			glm::vec3 v;
+			float dtAvg;
+			if (loop && (i == 0 || i == N))
+			{
+				v = (P[1] - P[N - 1]) / glm::max(0.0001f, (T[1] - T[0]) + (T[N] - T[N - 1]));
+				dtAvg = 0.5f * ((T[1] - T[0]) + (T[N] - T[N - 1]));
+			}
+			else
+			{
+				int a = glm::max(0, i - 1), b = glm::min(N, i + 1);
+				v = (P[b] - P[a]) / glm::max(0.0001f, T[b] - T[a]);
+				dtAvg = 0.5f * ((i > 0 ? T[i] - T[i - 1] : T[1] - T[0]) + (i < N ? T[i + 1] - T[i] : T[i] - T[i - 1]));
+			}
+			posTrack.frames.push_back(new PosFrame(T[i], std::pair<glm::vec3, glm::vec3>(P[i], v * dtAvg)));
+		}
+		const int M = glm::max(2, (int)std::ceil(duration / 0.5f));
+		for (int j = 0; j <= M; j++)
+		{
+			glm::vec3 p, t;
+			sample(j / (float)M, p, t);
+			tgtTrack.frames.push_back(new TgtFrame(duration * j / (float)M, Rsw::CameraTarget(t, 1.0f)));
+		}
+		rsw->cinematicLength = duration;
+		return "";
 	}
 
 	// Builds the keyframes of an automatic shot. Returns a message when it had to fall back to another preset.
@@ -1518,6 +1680,9 @@ void BrowEdit::showCinematicModeWindow()
 		ImGui::SameLine();
 		if (ImGui::Button("Redo")) actRedo = true;
 		ImGui::SameLine();
+		if (ImGui::Button("Draw path...")) { cinedraw::showPanel = true; cinedraw::active = true; }
+		if (ImGui::IsItemHovered()) ImGui::SetTooltip("Draw the camera path on the map: click to add points, the camera follows the line and turns with it");
+		ImGui::SameLine();
 		if (ImGui::Button("Generate...")) ImGui::OpenPopup("GenerateCinematic");
 		if (ImGui::IsItemHovered()) ImGui::SetTooltip("Automatic cinematic based on the map (field, city, dungeon, orbit, ...)");
 
@@ -1590,6 +1755,99 @@ void BrowEdit::showCinematicModeWindow()
 		ImGui::EndPopup();
 	}
 
+
+	if (cinedraw::showPanel)
+	{
+		using namespace cinedraw;
+		bool open = true;
+		ImGui::SetNextWindowSize(ImVec2(360, 520), ImGuiCond_FirstUseEver);
+		if (ImGui::Begin("Cinematic Path", &open))
+		{
+			if (ImGui::Checkbox("Drawing (click on the map)", &active)) pickFocus = false;
+			ImGui::TextWrapped("Left click adds a point at the end (Alt+click inserts after the selected point), drag a point to move it, right click on a point deletes it, Enter stops drawing.");
+			if (ImGui::Button("Clear")) { points.clear(); selected = -1; dirty = true; }
+			ImGui::SameLine();
+			if (ImGui::Button("Remove last") && !points.empty()) { points.pop_back(); selected = -1; dirty = true; }
+			ImGui::SameLine();
+			if (ImGui::Button("Reverse")) { std::reverse(points.begin(), points.end()); selected = -1; dirty = true; }
+			ImGui::Separator();
+			bool changed = false;
+			changed |= ImGui::DragFloat("Camera height", &defaultHeight, 0.5f, 3.0f, 500.0f);
+			changed |= ImGui::DragFloat("Duration (s)", &duration, 0.5f, 3.0f, 600.0f);
+			changed |= ImGui::SliderFloat("Pitch (degrees down)", &pitchDeg, -10.0f, 60.0f, "%.0f");
+			changed |= ImGui::Combo("Camera looks", &defLook, "Ahead\0Sideways (left)\0Sideways (right)\0Looking back\0\0Slow pan left to right\0");
+			changed |= ImGui::SliderFloat("Pacing (slow-mo)", &pacing, 0.0f, 100.0f, "%.0f%%");
+			if (ImGui::IsItemHovered()) ImGui::SetTooltip("Slow motion at corners and at points with their own height / look / focus, faster in between");
+			changed |= ImGui::Checkbox("Slow down in corners", &slowCorners);
+			changed |= ImGui::SliderFloat("Keys per second", &keysPerSec, 0.3f, 2.0f, "%.2f");
+			changed |= ImGui::Checkbox("Loop (close the path)", &closedLoop);
+			ImGui::Checkbox("Update the cinematic while editing", &autoUpdate);
+			if (changed) dirty = true;
+			ImGui::Separator();
+			ImGui::Text("Points (%d)", (int)points.size());
+			if (ImGui::BeginChild("pathpoints", ImVec2(-1, 110), true))
+			{
+				for (int i = 0; i < (int)points.size(); i++)
+				{
+					std::string label = "#" + std::to_string(i + 1) + "  " + std::to_string((int)points[i].pos.x) + ", " + std::to_string((int)points[i].pos.z)
+						+ (points[i].hasFocus ? "  [focus]" : "") + (points[i].look >= 0 ? "  [look]" : "") + (points[i].height >= 0 ? "  [height]" : "");
+					if (ImGui::Selectable(label.c_str(), selected == i)) selected = i;
+				}
+			}
+			ImGui::EndChild();
+			if (selected >= 0 && selected < (int)points.size())
+			{
+				auto& pt = points[selected];
+				ImGui::Text("Point #%d", selected + 1);
+				bool ho = pt.height >= 0;
+				if (ImGui::Checkbox("Own height", &ho)) { pt.height = ho ? defaultHeight : -1.0f; dirty = true; }
+				if (ho) dirty |= ImGui::DragFloat("Height##pt", &pt.height, 0.5f, 3.0f, 500.0f);
+				int lk = pt.look + 1;
+				if (ImGui::Combo("Look here", &lk, "Default\0Ahead\0Sideways (left)\0Sideways (right)\0Looking back\0")) { pt.look = lk - 1; dirty = true; }
+				if (ImGui::Checkbox("Look at a focus point here", &pt.hasFocus))
+				{
+					if (pt.hasFocus && glm::length(pt.focus) < 0.001f) pt.focus = pt.pos + glm::vec3(0, 8, 0);
+					dirty = true;
+				}
+				if (pt.hasFocus)
+				{
+					ImGui::SameLine();
+					if (ImGui::Button(pickFocus ? "Click on the map..." : "Pick on map")) { pickFocus = !pickFocus; active = true; }
+					dirty |= ImGui::DragFloat3("Focus", &pt.focus.x, 0.5f);
+				}
+				if (ImGui::Button("Delete point")) { points.erase(points.begin() + selected); selected = -1; dirty = true; }
+			}
+			ImGui::Separator();
+			bool createClicked = ImGui::Button("Create cinematic from path", ImVec2(-1, 0));
+			bool createAuto = autoUpdate && dirty && !ImGui::IsMouseDown(0) && points.size() >= 2;
+			if (createClicked || createAuto)
+			{
+				if (createClicked)
+					pushUndo(rsw);
+				std::string pathMsg = generateFromPath(rsw, activeMapView);
+				dirty = false;
+				timeSelected = 0;
+				selectedKeyFrame = -1; selectedTrack = -1;
+				multiSel.clear();
+				if (!pathMsg.empty())
+					ImGui::OpenPopup("PathMsg");
+				else
+					activeMapView->cinematicPlay = false;
+			}
+			if (ImGui::BeginPopup("PathMsg"))
+			{
+				ImGui::Text("Draw at least two points first.");
+				ImGui::EndPopup();
+			}
+		}
+		ImGui::End();
+		if (!open)
+		{
+			showPanel = false;
+			active = false;
+			pickFocus = false;
+		}
+	}
 	// ---- timeline -------------------------------------------------------------------------------------
 	if (rsw->cinematicLength > 0 && ImGui::BeginChild("KeyframeEditor", ImVec2(-1, 200), true, ImGuiWindowFlags_AlwaysHorizontalScrollbar))
 	{
