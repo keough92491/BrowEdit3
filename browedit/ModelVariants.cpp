@@ -122,12 +122,258 @@ namespace modelvariants
 			glTexSubImage2D(GL_TEXTURE_2D, 0, 0, 0, T, T, GL_RGBA, GL_UNSIGNED_BYTE, px.data());
 		}
 
+		// ---------------------------------------------------------------- brush painting (on the texture, with the model's UV faces shown)
+		struct PaintTex
+		{
+			int w = 0, h = 0;
+			std::vector<unsigned char> orig, overlay, comp;		// RGBA; overlay alpha = paint coverage
+			std::string name;
+			std::vector<unsigned char> uvMask;						// 255 where a face of this model uses the pixel
+			std::vector<float> lines;								// uv edges (u0,v0,u1,v1) for the wireframe
+			gl::Texture* view = nullptr;
+			std::vector<std::vector<unsigned char>> undo;
+			bool dirtyView = true, dirtyModel = false;
+			bool hasPaint = false;
+		};
+		std::map<std::string, PaintTex> paintTex;
+		std::string paintCur;
+		float brushSize = 24.0f, brushHard = 0.6f, brushOpacity = 1.0f, zoom = 1.0f;
+		float brushColor[3] = { 0.8f, 0.2f, 0.1f };
+		int brushMode = 0;				// 0 colour, 1 stamp texture
+		bool onlyUv = true, showUv = true, livePreview = true, eraseMode = false;
+		std::string stampTex;
+		float stampTiling = 1.0f;
+		ImVec2 pan(0, 0);
+		bool painting = false;
+		ImVec2 lastPaintPos(-1, -1);
+		bool previewActive = false;
+		std::set<std::string> previewTouched;
+
+		bool needsBase(const PaintTex& pt, int i) { return !isKey(&pt.orig[i * 4]); }
+
+		void compositeRange(PaintTex& pt, int x0, int y0, int x1, int y1, bool = true)
+		{
+			bool useParams = enabled.count(pt.name) ? enabled[pt.name] : true;
+			x0 = std::max(0, x0); y0 = std::max(0, y0); x1 = std::min(pt.w - 1, x1); y1 = std::min(pt.h - 1, y1);
+			for (int y = y0; y <= y1; y++)
+				for (int x = x0; x <= x1; x++)
+				{
+					size_t i = (size_t)y * pt.w + x;
+					unsigned char* d = &pt.comp[i * 4];
+					const unsigned char* o = &pt.orig[i * 4];
+					if (isKey(o)) { d[0] = o[0]; d[1] = o[1]; d[2] = o[2]; d[3] = o[3]; continue; }
+					unsigned char base[3];
+					if (useParams) transform(params, o, base); else { base[0] = o[0]; base[1] = o[1]; base[2] = o[2]; }
+					const unsigned char* v = &pt.overlay[i * 4];
+					float a = v[3] / 255.0f;
+					for (int c = 0; c < 3; c++) d[c] = (unsigned char)std::lround(base[c] * (1 - a) + v[c] * a);
+					d[3] = o[3];
+				}
+		}
+
+		void rasterTri(PaintTex& pt, glm::vec2 a, glm::vec2 b, glm::vec2 c)
+		{
+			a *= glm::vec2((float)pt.w, (float)pt.h); b *= glm::vec2((float)pt.w, (float)pt.h); c *= glm::vec2((float)pt.w, (float)pt.h);
+			int x0 = (int)std::floor(std::min({ a.x, b.x, c.x })) - 1, x1 = (int)std::ceil(std::max({ a.x, b.x, c.x })) + 1;
+			int y0 = (int)std::floor(std::min({ a.y, b.y, c.y })) - 1, y1 = (int)std::ceil(std::max({ a.y, b.y, c.y })) + 1;
+			x0 = std::max(0, x0); y0 = std::max(0, y0); x1 = std::min(pt.w - 1, x1); y1 = std::min(pt.h - 1, y1);
+			float den = (b.y - c.y) * (a.x - c.x) + (c.x - b.x) * (a.y - c.y);
+			if (std::fabs(den) < 1e-6f) return;
+			for (int y = y0; y <= y1; y++)
+				for (int x = x0; x <= x1; x++)
+				{
+					float px = x + 0.5f, py = y + 0.5f;
+					float l1 = ((b.y - c.y) * (px - c.x) + (c.x - b.x) * (py - c.y)) / den;
+					float l2 = ((c.y - a.y) * (px - c.x) + (a.x - c.x) * (py - c.y)) / den;
+					float l3 = 1 - l1 - l2;
+					const float e = -0.06f;		// a hair outside, so seams are covered
+					if (l1 >= e && l2 >= e && l3 >= e) pt.uvMask[(size_t)y * pt.w + x] = 255;
+				}
+		}
+
+		PaintTex* getPaint(Rsm* rsm, const std::string& texName, int texIndex)
+		{
+			auto it = paintTex.find(texName);
+			if (it != paintTex.end()) return &it->second;
+			auto im = advtex::getImg(texName);
+			if (!im) return nullptr;
+			PaintTex pt; pt.name = texName; pt.w = im->w; pt.h = im->h;
+			pt.orig = im->px;
+			pt.overlay.assign(pt.orig.size(), 0);
+			pt.comp = pt.orig;
+			pt.uvMask.assign((size_t)pt.w * pt.h, 0);
+			rsm->rootMesh->foreach([&](Rsm::Mesh* m)
+				{
+					for (auto& f : m->faces)
+					{
+						if (f.texId < 0 || f.texId >= (int)m->textures.size() || m->textures[f.texId] != texIndex) continue;
+						glm::vec2 uv[3];
+						bool ok = true;
+						for (int k = 0; k < 3; k++) { if (f.texCoordIds[k] >= m->texCoords.size()) { ok = false; break; } uv[k] = m->texCoords[f.texCoordIds[k]]; }
+						if (!ok) continue;
+						rasterTri(pt, uv[0], uv[1], uv[2]);
+						for (int k = 0; k < 3; k++) { auto& q = uv[(k + 1) % 3]; pt.lines.insert(pt.lines.end(), { uv[k].x, uv[k].y, q.x, q.y }); }
+					}
+				});
+			return &(paintTex[texName] = std::move(pt));
+		}
+
+		void uploadView(PaintTex& pt)
+		{
+			if (!pt.view) pt.view = new gl::Texture(pt.w, pt.h);
+			glBindTexture(GL_TEXTURE_2D, pt.view->id());
+			glTexSubImage2D(GL_TEXTURE_2D, 0, 0, 0, pt.w, pt.h, GL_RGBA, GL_UNSIGNED_BYTE, pt.comp.data());
+			pt.dirtyView = false;
+		}
+
+		void uploadToModelTexture(const std::string& name, const std::vector<unsigned char>& px, int w, int h)
+		{
+			auto t = util::ResourceManager<gl::Texture>::load("data\\texture\\" + name);
+			if (!t || !t->id() || t->width != w || t->height != h) return;
+			glBindTexture(GL_TEXTURE_2D, t->id());
+			glTexSubImage2D(GL_TEXTURE_2D, 0, 0, 0, w, h, GL_RGBA, GL_UNSIGNED_BYTE, px.data());
+			glGenerateMipmap(GL_TEXTURE_2D);
+			previewTouched.insert(name);
+		}
+
+		// puts the real pictures back on the model in the map
+		void restorePreview()
+		{
+			for (auto& kv : paintTex)
+				if (previewTouched.count(kv.first)) uploadToModelTexture(kv.first, kv.second.orig, kv.second.w, kv.second.h);
+			previewTouched.clear();
+			previewActive = false;
+		}
+
+		void resetPaint()
+		{
+			restorePreview();
+			for (auto& kv : paintTex) delete kv.second.view;
+			paintTex.clear();
+			paintCur.clear();
+		}
+
+		float stampSample(const advtex::Img& im, float u, float v, int c)
+		{
+			int x = ((int)std::floor(u * im.w) % im.w + im.w) % im.w, y = ((int)std::floor(v * im.h) % im.h + im.h) % im.h;
+			return im.px[((size_t)y * im.w + x) * 4 + c];
+		}
+
+		void stamp(PaintTex& pt, float cx, float cy, bool erase)
+		{
+			const float r = std::max(1.0f, brushSize * 0.5f);
+			int x0 = (int)std::floor(cx - r), x1 = (int)std::ceil(cx + r), y0 = (int)std::floor(cy - r), y1 = (int)std::ceil(cy + r);
+			const advtex::Img* st = (brushMode == 1 && !stampTex.empty()) ? advtex::getImg(stampTex) : nullptr;
+			for (int y = std::max(0, y0); y <= std::min(pt.h - 1, y1); y++)
+				for (int x = std::max(0, x0); x <= std::min(pt.w - 1, x1); x++)
+				{
+					float d = std::sqrt((x + 0.5f - cx) * (x + 0.5f - cx) + (y + 0.5f - cy) * (y + 0.5f - cy)) / r;
+					if (d >= 1.0f) continue;
+					size_t i = (size_t)y * pt.w + x;
+					if (onlyUv && !pt.uvMask[i]) continue;
+					if (isKey(&pt.orig[i * 4])) continue;
+					float a = (d <= brushHard ? 1.0f : 1.0f - (d - brushHard) / (1.0f - brushHard + 1e-4f)) * brushOpacity;
+					a = std::clamp(a, 0.0f, 1.0f);
+					unsigned char* v = &pt.overlay[i * 4];
+					if (erase) { v[3] = (unsigned char)std::lround(v[3] * (1 - a)); continue; }
+					float col[3];
+					if (st) for (int c = 0; c < 3; c++) col[c] = stampSample(*st, (x + 0.5f) / pt.w * stampTiling * 4.0f, (y + 0.5f) / pt.h * stampTiling * 4.0f, c);
+					else for (int c = 0; c < 3; c++) col[c] = brushColor[c] * 255.0f;
+					float oa = v[3] / 255.0f, na = a + oa * (1 - a);
+					if (na <= 0) continue;
+					for (int c = 0; c < 3; c++) v[c] = (unsigned char)std::clamp((int)std::lround((col[c] * a + v[c] * oa * (1 - a)) / na), 0, 255);
+					v[3] = (unsigned char)std::lround(na * 255.0f);
+				}
+			pt.hasPaint = true;
+			compositeRange(pt, x0, y0, x1, y1, true);
+			pt.dirtyView = true; pt.dirtyModel = true;
+		}
+
+		void drawPaintUi(Rsm* rsm)
+		{
+			ImGui::TextWrapped("Paint straight on a texture of the model. The UV lines show where the model's faces sit, so you can see what you are painting. With 'Preview on the model' on, the model in the map shows the paint live; nothing is saved until you press Generate variant.");
+			if (ImGui::BeginCombo("Texture", paintCur.empty() ? "(choose)" : util::iso_8859_1_to_utf8(paintCur).c_str()))
+			{
+				for (auto& t : rsm->textures)
+					if (ImGui::Selectable(util::iso_8859_1_to_utf8(t).c_str(), t == paintCur)) { paintCur = t; pan = ImVec2(0, 0); }
+				ImGui::EndCombo();
+			}
+			int texIndex = -1;
+			for (size_t i = 0; i < rsm->textures.size(); i++) if (rsm->textures[i] == paintCur) texIndex = (int)i;
+			if (texIndex < 0) return;
+			auto pt = getPaint(rsm, paintCur, texIndex);
+			if (!pt) { ImGui::TextUnformatted("Cannot read this texture."); return; }
+
+			ImGui::RadioButton("Colour", &brushMode, 0); ImGui::SameLine(); ImGui::RadioButton("Texture stamp", &brushMode, 1);
+			if (brushMode == 0) { ImGui::SameLine(); ImGui::ColorEdit3("##bc", brushColor, ImGuiColorEditFlags_NoInputs); }
+			else { ImGui::InputText("Stamp texture (below data\\texture)", &stampTex); ImGui::SliderFloat("Stamp scale", &stampTiling, 0.25f, 8.0f, "%.2f"); }
+			ImGui::SliderFloat("Size (px)", &brushSize, 2.0f, 200.0f, "%.0f");
+			ImGui::SliderFloat("Hardness", &brushHard, 0.0f, 0.95f, "%.2f");
+			ImGui::SliderFloat("Opacity", &brushOpacity, 0.05f, 1.0f, "%.2f");
+			ImGui::Checkbox("Only on model faces", &onlyUv); ImGui::SameLine();
+			ImGui::Checkbox("Show UV lines", &showUv); ImGui::SameLine();
+			if (ImGui::Checkbox("Preview on the model", &livePreview) && !livePreview) restorePreview();
+			if (ImGui::Button("Undo") && !pt->undo.empty()) { pt->overlay = pt->undo.back(); pt->undo.pop_back(); compositeRange(*pt, 0, 0, pt->w, pt->h, true); pt->dirtyView = pt->dirtyModel = true; }
+			ImGui::SameLine();
+			if (ImGui::Button("Clear paint")) { pt->undo.push_back(pt->overlay); std::fill(pt->overlay.begin(), pt->overlay.end(), 0); pt->hasPaint = false; compositeRange(*pt, 0, 0, pt->w, pt->h, true); pt->dirtyView = pt->dirtyModel = true; }
+			ImGui::SameLine(); ImGui::TextUnformatted("Left paints, Ctrl or right erases, middle drag moves, wheel zooms");
+
+			// canvas
+			ImVec2 avail = ImGui::GetContentRegionAvail();
+			float side = std::max(200.0f, std::min(avail.x, 520.0f));
+			ImVec2 origin = ImGui::GetCursorScreenPos();
+			ImGui::InvisibleButton("##canvas", ImVec2(side, side), ImGuiButtonFlags_MouseButtonLeft | ImGuiButtonFlags_MouseButtonRight | ImGuiButtonFlags_MouseButtonMiddle);
+			bool hovered = ImGui::IsItemHovered();
+			auto& io = ImGui::GetIO();
+			float fit = side / (float)std::max(pt->w, pt->h);
+			if (hovered && io.MouseWheel != 0) zoom = std::clamp(zoom * (io.MouseWheel > 0 ? 1.15f : 1.0f / 1.15f), 0.3f, 12.0f);
+			if (ImGui::IsItemActive() && ImGui::IsMouseDragging(ImGuiMouseButton_Middle)) { pan.x += io.MouseDelta.x; pan.y += io.MouseDelta.y; }
+			float sc = fit * zoom;
+			ImVec2 img0(origin.x + pan.x, origin.y + pan.y), img1(img0.x + pt->w * sc, img0.y + pt->h * sc);
+			if (pt->dirtyView || !pt->view) uploadView(*pt);
+			auto dl = ImGui::GetWindowDrawList();
+			dl->PushClipRect(origin, ImVec2(origin.x + side, origin.y + side), true);
+			dl->AddRectFilled(origin, ImVec2(origin.x + side, origin.y + side), IM_COL32(40, 40, 40, 255));
+			dl->AddImage((ImTextureID)(intptr_t)pt->view->id(), img0, img1);
+			if (showUv)
+				for (size_t i = 0; i + 3 < pt->lines.size(); i += 4)
+					dl->AddLine(ImVec2(img0.x + pt->lines[i] * pt->w * sc, img0.y + pt->lines[i + 1] * pt->h * sc), ImVec2(img0.x + pt->lines[i + 2] * pt->w * sc, img0.y + pt->lines[i + 3] * pt->h * sc), IM_COL32(255, 255, 0, 110));
+			if (hovered)
+				dl->AddCircle(io.MousePos, std::max(2.0f, brushSize * 0.5f * sc), IM_COL32(255, 255, 255, 220), 32);
+			dl->PopClipRect();
+
+			bool lDown = ImGui::IsItemActive() && ImGui::IsMouseDown(ImGuiMouseButton_Left), rDown = ImGui::IsItemActive() && ImGui::IsMouseDown(ImGuiMouseButton_Right);
+			if (lDown || rDown)
+			{
+				bool erase = rDown || io.KeyCtrl;
+				float px = (io.MousePos.x - img0.x) / sc, py = (io.MousePos.y - img0.y) / sc;
+				if (!painting) { painting = true; pt->undo.push_back(pt->overlay); if (pt->undo.size() > 15) pt->undo.erase(pt->undo.begin()); lastPaintPos = ImVec2(px, py); stamp(*pt, px, py, erase); }
+				else
+				{
+					float dx = px - lastPaintPos.x, dy = py - lastPaintPos.y, dist = std::sqrt(dx * dx + dy * dy), step = std::max(1.0f, brushSize * 0.2f);
+					int n = (int)(dist / step);
+					for (int i = 1; i <= n; i++) stamp(*pt, lastPaintPos.x + dx / dist * step * i, lastPaintPos.y + dy / dist * step * i, erase);
+					if (n > 0) lastPaintPos = ImVec2(lastPaintPos.x + dx / dist * step * n, lastPaintPos.y + dy / dist * step * n);
+				}
+			}
+			else painting = false;
+			if (pt->dirtyModel && livePreview) { uploadToModelTexture(paintCur, pt->comp, pt->w, pt->h); previewActive = true; pt->dirtyModel = false; }
+		}
+
 		bool writeTexture(BrowEdit* be, const std::string& oldName, const std::string& newName, std::string& err)
 		{
 			auto im = advtex::getImg(oldName);
 			if (!im) { err = "Cannot read texture " + oldName; return false; }
 			std::vector<unsigned char> px(im->px.size());
 			bool alpha = false;
+			auto pit = paintTex.find(oldName);
+			if (pit != paintTex.end() && pit->second.comp.size() == px.size())
+			{
+				compositeRange(pit->second, 0, 0, pit->second.w, pit->second.h);
+				px = pit->second.comp;
+				for (size_t i = 3; i < px.size(); i += 4) if (px[i] < 255) { alpha = true; break; }
+			}
+			else
 			for (size_t i = 0; i < px.size(); i += 4)
 			{
 				const unsigned char* s = &im->px[i];
@@ -158,7 +404,7 @@ namespace modelvariants
 
 	void showWindow(BrowEdit* be)
 	{
-		if (!visible) return;
+		if (!visible) { if (previewActive) restorePreview(); return; }
 		ImGui::SetNextWindowSize(ImVec2(520, 640), ImGuiCond_FirstUseEver);
 		if (!ImGui::Begin("Model variants", &visible)) { ImGui::End(); return; }
 		auto mv = be->activeMapView;
@@ -168,7 +414,7 @@ namespace modelvariants
 		// source: the first selected model, or typed in
 		if (ImGui::Button("Use selected model"))
 			for (auto n : map->selectedNodes)
-				if (auto m = n->getComponent<RswModel>()) { srcModel = "data\\model\\" + util::utf8_to_iso_8859_1(m->fileName); thumbsDirty = true; enabled.clear(); break; }
+				if (auto m = n->getComponent<RswModel>()) { { resetPaint(); srcModel = "data\\model\\" + util::utf8_to_iso_8859_1(m->fileName); thumbsDirty = true; enabled.clear(); break; }
 		ImGui::SameLine();
 		ImGui::TextWrapped("%s", srcModel.empty() ? "Select a model in the map, then press the button" : util::iso_8859_1_to_utf8(srcModel).c_str());
 		if (srcModel.empty()) { ImGui::End(); return; }
@@ -197,7 +443,13 @@ namespace modelvariants
 			{ "Dead", { 0, 0.3f, 0.75f, 1.1f, 0.3f, { 0.6f, 0.5f, 0.35f } } },
 		};
 		for (auto& pr : presets) { ImGui::SameLine(); if (ImGui::SmallButton(pr.n)) { params = pr.p; changed = true; } }
-		if (changed) thumbsDirty = true;
+		if (changed)
+		{
+			thumbsDirty = true;
+			if (livePreview)
+				for (size_t i = 0; i < rsm->textures.size(); i++)
+					if (auto pt = getPaint(rsm, rsm->textures[i], (int)i)) { compositeRange(*pt, 0, 0, pt->w, pt->h); pt->dirtyView = pt->dirtyModel = true; }
+		}
 		ImGui::NewLine();
 		ImGui::Separator();
 
@@ -223,6 +475,11 @@ namespace modelvariants
 			ImGui::PopID();
 		}
 		thumbsDirty = false;
+		for (auto& kv : paintTex)
+			if (kv.second.dirtyModel && livePreview) { uploadToModelTexture(kv.first, kv.second.comp, kv.second.w, kv.second.h); previewActive = true; kv.second.dirtyModel = false; }
+		ImGui::Separator();
+		if (ImGui::CollapsingHeader("Paint on the textures (brush)"))
+			drawPaintUi(rsm);
 		ImGui::Separator();
 
 		ImGui::InputText("Name suffix", &suffix);
@@ -240,7 +497,7 @@ namespace modelvariants
 			std::map<std::string, std::string> names;
 			bool ok = true;
 			for (auto& t : rsm->textures)
-				if (enabled[t])
+				if (enabled[t] || (paintTex.count(t) && paintTex[t].hasPaint))
 				{
 					std::string nn = newTextureName(t);
 					if (rsm->version < 0x0202 && nn.size() > 39) { result = "Texture name too long for model version 1.x (39 characters): " + nn + "\nUse a shorter texture folder or suffix."; ok = false; break; }
@@ -266,6 +523,7 @@ namespace modelvariants
 			}
 			if (ok)
 			{
+				restorePreview();
 				result = "Saved " + util::iso_8859_1_to_utf8(newModel) + " and " + std::to_string(names.size()) + " texture(s).";
 				if (swapMode > 0)
 				{
