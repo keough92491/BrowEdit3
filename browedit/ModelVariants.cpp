@@ -408,6 +408,138 @@ namespace modelvariants
 		}
 	}
 
+	// ---------------------------------------------------------------- automatic effects (snow, side growth, bottom wear), from the faces' direction and height
+	namespace
+	{
+		struct Effect
+		{
+			int type = 0;						// 0 snow on top, 1 growth on the sides, 2 wear / dirt at the bottom
+			float colour[3] = { 0.95f, 0.97f, 1.0f };
+			std::string stamp;
+			float stampScale = 1.0f;
+			float amount = 1.0f, threshold = 0.45f, softness = 0.25f, noise = 0.5f, noiseScale = 12.0f;
+			int dir = 0;						// side growth: 0 any, 1 north, 2 east, 3 south, 4 west
+			float height = 0.35f;				// bottom wear: how much of the model height
+		} fx;
+		std::string fxResult;
+
+		float vn(float x, float y)
+		{
+			auto h = [](int xi, int yi) { unsigned int v = (unsigned int)(xi * 374761393 + yi * 668265263); v = (v ^ (v >> 13)) * 1274126177u; v ^= v >> 16; return (v & 0xFFFFFF) / (float)0xFFFFFF; };
+			int xi = (int)std::floor(x), yi = (int)std::floor(y);
+			float fx_ = x - xi, fy_ = y - yi;
+			fx_ = fx_ * fx_ * (3 - 2 * fx_); fy_ = fy_ * fy_ * (3 - 2 * fy_);
+			float a = h(xi, yi), b = h(xi + 1, yi), c = h(xi, yi + 1), d = h(xi + 1, yi + 1);
+			return (a + (b - a) * fx_) + ((c + (d - c) * fx_) - (a + (b - a) * fx_)) * fy_;
+		}
+		float sstep(float a, float b, float x) { if (b <= a) return x >= b ? 1.0f : 0.0f; x = std::clamp((x - a) / (b - a), 0.0f, 1.0f); return x * x * (3 - 2 * x); }
+
+		void applyEffect(MapView* mv, Rsm* rsm)
+		{
+			fxResult.clear();
+			Node* inst = nullptr;
+			for (auto n : mv->map->selectedNodes)
+				if (auto m = n->getComponent<RswModel>()) if ("data\\model\\" + util::utf8_to_iso_8859_1(m->fileName) == srcModel) { inst = n; break; }
+			if (!inst)
+				mv->map->rootNode->traverse([&](Node* n) { if (inst) return; if (auto m = n->getComponent<RswModel>()) if ("data\\model\\" + util::utf8_to_iso_8859_1(m->fileName) == srcModel) inst = n; });
+			auto rr = inst ? inst->getComponent<RsmRenderer>() : nullptr;
+			if (!rr) { fxResult = "No instance of this model in the map to read its direction from."; return; }
+
+			// world height range
+			float ymin = 1e30f, ymax = -1e30f;
+			rsm->rootMesh->foreach([&](Rsm::Mesh* m)
+				{
+					if (m->index >= rr->renderInfo.size()) return;
+					glm::mat4 mat = rr->matrixCache * rr->renderInfo[m->index].matrix;
+					for (auto& v : m->vertices) { float y = (mat * glm::vec4(v, 1)).y; ymin = std::min(ymin, y); ymax = std::max(ymax, y); }
+				});
+			if (ymax <= ymin) { fxResult = "The model has no size."; return; }
+
+			glm::vec3 side(0);
+			if (fx.dir == 1) side = glm::vec3(0, 0, -1); else if (fx.dir == 2) side = glm::vec3(1, 0, 0); else if (fx.dir == 3) side = glm::vec3(0, 0, 1); else if (fx.dir == 4) side = glm::vec3(-1, 0, 0);
+			const advtex::Img* st = fx.stamp.empty() ? nullptr : advtex::getImg(fx.stamp);
+
+			std::set<std::string> touchedTex;
+			rsm->rootMesh->foreach([&](Rsm::Mesh* m)
+				{
+					if (m->index >= rr->renderInfo.size()) return;
+					glm::mat4 mat = rr->matrixCache * rr->renderInfo[m->index].matrix;
+					glm::mat3 nmat = glm::transpose(glm::inverse(glm::mat3(mat)));
+					for (auto& f : m->faces)
+					{
+						if (f.texId < 0 || f.texId >= (int)m->textures.size()) continue;
+						int ti = m->textures[f.texId];
+						if (ti < 0 || ti >= (int)rsm->textures.size()) continue;
+						if (f.texCoordIds[0] >= m->texCoords.size() || f.texCoordIds[1] >= m->texCoords.size() || f.texCoordIds[2] >= m->texCoords.size()) continue;
+						auto pt = getPaint(rsm, rsm->textures[ti], ti);
+						if (!pt) continue;
+						if (!touchedTex.count(rsm->textures[ti])) { pt->undo.push_back(pt->overlay); if (pt->undo.size() > 15) pt->undo.erase(pt->undo.begin()); touchedTex.insert(rsm->textures[ti]); }
+						glm::vec3 wv[3], wn[3];
+						glm::vec3 geo = glm::cross(glm::vec3(mat * glm::vec4(m->vertices[f.vertexIds[1]], 1)) - glm::vec3(mat * glm::vec4(m->vertices[f.vertexIds[0]], 1)), glm::vec3(mat * glm::vec4(m->vertices[f.vertexIds[2]], 1)) - glm::vec3(mat * glm::vec4(m->vertices[f.vertexIds[0]], 1)));
+						glm::vec3 geoN = glm::length(geo) > 1e-9f ? glm::normalize(geo) : glm::vec3(0, 1, 0);
+						for (int k = 0; k < 3; k++)
+						{
+							wv[k] = glm::vec3(mat * glm::vec4(m->vertices[f.vertexIds[k]], 1));
+							glm::vec3 n = f.vertexNormals[k];
+							if (glm::length(n) < 0.1f) n = f.normal;
+							wn[k] = glm::length(n) > 0.1f ? glm::normalize(nmat * n) : geoN;
+						}
+						glm::vec2 uv[3];
+						for (int k = 0; k < 3; k++) uv[k] = m->texCoords[f.texCoordIds[k]] * glm::vec2((float)pt->w, (float)pt->h);
+						int x0 = std::max(0, (int)std::floor(std::min({ uv[0].x, uv[1].x, uv[2].x })) - 1), x1 = std::min(pt->w - 1, (int)std::ceil(std::max({ uv[0].x, uv[1].x, uv[2].x })) + 1);
+						int y0 = std::max(0, (int)std::floor(std::min({ uv[0].y, uv[1].y, uv[2].y })) - 1), y1 = std::min(pt->h - 1, (int)std::ceil(std::max({ uv[0].y, uv[1].y, uv[2].y })) + 1);
+						float den = (uv[1].y - uv[2].y) * (uv[0].x - uv[2].x) + (uv[2].x - uv[1].x) * (uv[0].y - uv[2].y);
+						if (std::fabs(den) < 1e-6f) continue;
+						for (int y = y0; y <= y1; y++)
+							for (int x = x0; x <= x1; x++)
+							{
+								float px = x + 0.5f, py = y + 0.5f;
+								float l1 = ((uv[1].y - uv[2].y) * (px - uv[2].x) + (uv[2].x - uv[1].x) * (py - uv[2].y)) / den;
+								float l2 = ((uv[2].y - uv[0].y) * (px - uv[2].x) + (uv[0].x - uv[2].x) * (py - uv[2].y)) / den;
+								float l3 = 1 - l1 - l2;
+								if (l1 < -0.05f || l2 < -0.05f || l3 < -0.05f) continue;
+								size_t i = (size_t)y * pt->w + x;
+								if (isKey(&pt->orig[i * 4])) continue;
+								glm::vec3 n = glm::normalize(wn[0] * l1 + wn[1] * l2 + wn[2] * l3 + glm::vec3(1e-6f));
+								float wy = wv[0].y * l1 + wv[1].y * l2 + wv[2].y * l3;
+								float w = 0;
+								float nz = (vn(px / fx.noiseScale, py / fx.noiseScale) * 0.65f + vn(px / fx.noiseScale * 2.3f + 11.0f, py / fx.noiseScale * 2.3f + 5.0f) * 0.35f) - 0.5f;		// -0.5..0.5
+								if (fx.type == 0)
+									w = sstep(fx.threshold - fx.softness * 0.5f, fx.threshold + fx.softness * 0.5f, n.y + nz * fx.noise);
+								else if (fx.type == 1)
+								{
+									float vertical = 1.0f - std::fabs(n.y);			// 1 on walls
+									float facing = glm::length(side) < 0.5f ? 1.0f : std::clamp(glm::dot(glm::normalize(glm::vec3(n.x, 0, n.z) + glm::vec3(1e-6f)), side) * 0.5f + 0.5f, 0.0f, 1.0f);
+									w = sstep(fx.threshold - fx.softness * 0.5f, fx.threshold + fx.softness * 0.5f, vertical * facing + nz * fx.noise);
+								}
+								else
+								{
+									float rel = (wy - ymin) / (ymax - ymin);
+									w = 1.0f - sstep(fx.height * (1.0f - fx.softness), fx.height + 1e-4f, rel + nz * fx.noise * 0.5f);
+								}
+								float a = std::clamp(w * fx.amount, 0.0f, 1.0f);
+								if (a <= 0.003f) continue;
+								float col[3];
+								if (st) for (int c = 0; c < 3; c++) col[c] = stampSample(*st, px / pt->w * fx.stampScale * 4.0f, py / pt->h * fx.stampScale * 4.0f, c);
+								else for (int c = 0; c < 3; c++) col[c] = fx.colour[c] * 255.0f;
+								unsigned char* v = &pt->overlay[i * 4];
+								float oa = v[3] / 255.0f, na = a + oa * (1 - a);
+								for (int c = 0; c < 3; c++) v[c] = (unsigned char)std::clamp((int)std::lround((col[c] * a + v[c] * oa * (1 - a)) / na), 0, 255);
+								v[3] = (unsigned char)std::lround(na * 255.0f);
+							}
+					}
+				});
+			for (auto& n : touchedTex)
+			{
+				auto& pt = paintTex[n];
+				pt.hasPaint = true;
+				compositeRange(pt, 0, 0, pt.w, pt.h);
+				pt.dirtyView = pt.dirtyModel = true;
+			}
+			fxResult = "Applied to " + std::to_string(touchedTex.size()) + " texture(s). Use Undo in the paint section to take it back.";
+		}
+	}
+
 	// ---------------------------------------------------------------- painting in the 3D view (Advanced Texture mode)
 	namespace
 	{
@@ -607,6 +739,29 @@ namespace modelvariants
 		for (auto& kv : paintTex)
 			if (kv.second.dirtyModel && livePreview) { uploadToModelTexture(kv.first, kv.second.comp, kv.second.w, kv.second.h); previewActive = true; kv.second.dirtyModel = false; }
 		ImGui::Separator();
+		if (ImGui::CollapsingHeader("Automatic effects (snow, growth, wear)"))
+		{
+			const char* names[] = { "Snow on top", "Growth on the sides (moss, vines)", "Wear / dirt at the bottom" };
+			int before = fx.type;
+			ImGui::Combo("Effect", &fx.type, names, 3);
+			if (before != fx.type)
+			{
+				if (fx.type == 0) { fx.colour[0] = 0.95f; fx.colour[1] = 0.97f; fx.colour[2] = 1.0f; fx.threshold = 0.45f; }
+				if (fx.type == 1) { fx.colour[0] = 0.25f; fx.colour[1] = 0.45f; fx.colour[2] = 0.15f; fx.threshold = 0.5f; }
+				if (fx.type == 2) { fx.colour[0] = 0.25f; fx.colour[1] = 0.18f; fx.colour[2] = 0.12f; fx.height = 0.3f; }
+			}
+			ImGui::ColorEdit3("Colour", fx.colour, ImGuiColorEditFlags_NoInputs);
+			ImGui::InputText("or stamp texture (below data\\texture)", &fx.stamp);
+			ImGui::SliderFloat("Amount", &fx.amount, 0.05f, 1.0f, "%.2f");
+			if (fx.type < 2) ImGui::SliderFloat("Threshold", &fx.threshold, 0.0f, 1.0f, "%.2f");
+			else ImGui::SliderFloat("Height covered", &fx.height, 0.05f, 1.0f, "%.2f");
+			ImGui::SliderFloat("Soft edge", &fx.softness, 0.02f, 1.0f, "%.2f");
+			ImGui::SliderFloat("Noise", &fx.noise, 0.0f, 1.0f, "%.2f");
+			ImGui::SliderFloat("Noise size (px)", &fx.noiseScale, 2.0f, 64.0f, "%.0f");
+			if (fx.type == 1) ImGui::Combo("Side", &fx.dir, "Any\0North\0East\0South\0West\0");
+			if (ImGui::Button("Apply effect")) applyEffect(mv, rsm);
+			if (!fxResult.empty()) ImGui::TextWrapped("%s", fxResult.c_str());
+		}
 		if (ImGui::CollapsingHeader("Paint on the textures (brush)"))
 			drawPaintUi(rsm);
 		ImGui::Separator();
