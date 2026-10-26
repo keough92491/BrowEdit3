@@ -157,6 +157,9 @@ void MapView::toolbar(BrowEdit* browEdit)
 
 
 			ImGui::Text("Object render settings");
+			ImGui::Checkbox("Render .str effects", &viewStr);
+			ImGui::Checkbox("Hide .str effects behind models", &strDepthTest);
+			if (ImGui::IsItemHovered()) ImGui::SetTooltip("On: models and terrain are drawn in front of .str effects.\nOff: .str effects are always drawn on top (the old behaviour).");
 			browEdit->toolBarToggleButton("viewModels", viewModels ? ICON_VIEW_MODEL_ON : ICON_VIEW_MODEL_OFF, viewModels, "View Models", HotkeyAction::View_Models, browEdit->config.toolbarButtonsViewOptions);
 			ImGui::SameLine();
 			browEdit->toolBarToggleButton("viewEffects", viewEffects ? ICON_VIEW_EFFECT_ON : ICON_VIEW_EFFECT_OFF, viewEffects, "View Effects", HotkeyAction::View_Effects, browEdit->config.toolbarButtonsViewOptions);
@@ -705,6 +708,8 @@ void MapView::render(BrowEdit* browEdit)
 		{
 			if (r->node->getComponent<RswModel>())
 				r->enabled = viewModels;
+			if (auto strR = dynamic_cast<StrRenderer*>(r))
+				strR->enabled = viewStr && viewEffects;
 			if (r->node->getComponent<RswEffect>())
 			{
 				if (dynamic_cast<BillboardRenderer*>(r))
