@@ -283,10 +283,434 @@ namespace
 		return out;
 	}
 
+	// slow-motion / fast mix along a polyline: returns the remap from time (0..1) to path position (0..1)
+	std::function<float(float)> buildRemap(const Poly& poly, const std::vector<float>& poiS, float strength, float slowSpeed, float fastSpeed)
+	{
+		const int ST = 600;
+		std::vector<float> mask(ST + 1, 0.0f), tc(ST + 1, 0.0f);
+		for (int k = 0; k <= ST; k++)
+		{
+			float sp = k / (float)ST, v = 0.0f;
+			for (float ps : poiS)
+			{
+				float d = (sp - ps) / 0.045f;
+				v = glm::max(v, std::exp(-d * d));
+			}
+			glm::vec2 a = poly.at(glm::max(0.0f, sp - 0.012f)), b = poly.at(sp), c2 = poly.at(glm::min(1.0f, sp + 0.012f));
+			glm::vec2 v1 = b - a, v2 = c2 - b;
+			if (glm::length(v1) > 0.01f && glm::length(v2) > 0.01f)
+			{
+				float ang = std::acos(glm::clamp(glm::dot(glm::normalize(v1), glm::normalize(v2)), -1.0f, 1.0f));
+				v = glm::max(v, glm::clamp(ang / 0.9f, 0.0f, 1.0f) * 0.7f);
+			}
+			mask[k] = v;
+		}
+		for (int pass = 0; pass < 3; pass++)
+		{
+			auto m2 = mask;
+			for (int k = 1; k < ST; k++) m2[k] = 0.25f * mask[k - 1] + 0.5f * mask[k] + 0.25f * mask[k + 1];
+			mask = m2;
+		}
+		for (int k = 0; k < ST; k++)
+			tc[k + 1] = tc[k] + 1.0f / glm::mix(1.0f, glm::mix(fastSpeed, slowSpeed, mask[k]), strength);
+		for (auto& t : tc) t /= tc.back();
+		return [tc, ST](float tau)
+		{
+			tau = glm::clamp(tau, 0.0f, 1.0f);
+			size_t k = std::upper_bound(tc.begin(), tc.end(), tau) - tc.begin();
+			if (k == 0) return 0.0f;
+			if (k >= tc.size()) return 1.0f;
+			float f = (tau - tc[k - 1]) / glm::max(0.000001f, tc[k] - tc[k - 1]);
+			return ((k - 1) + f) / (float)ST;
+		};
+	}
+
+	// "City road": street-level tour that stays on the roads (walkable cells away from large models), then spirals at the
+	// centre of the map, zooms out and zooms back in. Returns false (with a message) when the map has no usable roads.
+	bool generateCityRoad(Rsw* rsw, MapView* mv, const GenParams& gp, std::string& msg)
+	{
+		auto gnd = mv->map->rootNode->getComponent<Gnd>();
+		auto gat = mv->map->rootNode->getComponent<Gat>();
+		const int gw = gat->width, gh = gat->height;
+		const float W = gnd->width * 10.0f, D = gnd->height * 10.0f;
+		const float mg = glm::clamp(gp.margin, 0.0f, 40.0f) / 100.0f;
+		const float x0 = W * mg, x1 = W * (1 - mg), z0 = D * mg, z1 = D * (1 - mg);
+		const float sgn = gp.clockwise ? 1.0f : -1.0f;
+		glm::vec2 dirV = (x1 - x0) >= (z1 - z0) ? glm::vec2(1, 0) : glm::vec2(0, 1);
+		if (gp.startSide == 1) dirV = glm::vec2(1, 0);
+		else if (gp.startSide == 2) dirV = glm::vec2(-1, 0);
+		else if (gp.startSide == 3) dirV = glm::vec2(0, 1);
+		else if (gp.startSide == 4) dirV = glm::vec2(0, -1);
+		glm::vec2 mapC(W / 2, D / 2);
+		if (gp.useViewCenter) mapC = glm::vec2(mv->cameraCenter.x, mv->cameraCenter.z);
+		const float cg = groundAt(gnd, mapC.x, mapC.y, 0.0f);
+
+		auto walkable = [&](int x, int y) {
+			if (x < 0 || y < 0 || x >= gw || y >= gh) return false;
+			int t = gat->cubes[x][y]->gatType;
+			return t == 0 || t == 3 || t == 4 || t == 6;
+		};
+		auto cellWorld = [&](int x, int y) { return glm::vec2(5.0f * x + 2.5f, 5.0f * gh - 5.0f * y - 2.5f); };
+		auto worldCell = [&](glm::vec2 w) { return glm::ivec2((int)std::floor(w.x / 5.0f), (int)std::floor((5.0f * gh - w.y) / 5.0f)); };
+
+		// cells covered by large models (houses, walls, ...) plus a safety margin
+		std::vector<char> blocked((size_t)gw * gh, 0);
+		mv->map->rootNode->traverse([&](Node* n)
+		{
+			auto m = n->getComponent<RswModel>();
+			auto o = n->getComponent<RswObject>();
+			if (!m || !o) return;
+			float ex = (m->aabb.max.x - m->aabb.min.x) * std::abs(o->scale.x), ez = (m->aabb.max.z - m->aabb.min.z) * std::abs(o->scale.z);
+			float diameter = std::sqrt(ex * ex + ez * ez);
+			if (diameter < 30.0f || diameter > 5000.0f) return;
+			glm::vec2 wp(gnd->width * 5.0f + o->position.x, gnd->height * 5.0f - o->position.z + 10.0f);
+			float r = diameter * 0.5f * 0.85f + 8.0f;
+			glm::ivec2 cc = worldCell(wp);
+			int rc = (int)std::ceil(r / 5.0f);
+			for (int dy = -rc; dy <= rc; dy++)
+				for (int dx = -rc; dx <= rc; dx++)
+					if (dx * dx + dy * dy <= rc * rc && cc.x + dx >= 0 && cc.y + dy >= 0 && cc.x + dx < gw && cc.y + dy < gh)
+						blocked[(size_t)(cc.y + dy) * gw + cc.x + dx] = 1;
+		});
+		// distance (in cells) to the nearest blocked / non-walkable cell: the middle of a road has the highest value
+		std::vector<int> clr((size_t)gw * gh, -1);
+		{
+			std::queue<glm::ivec2> q;
+			for (int y = 0; y < gh; y++)
+				for (int x = 0; x < gw; x++)
+					if (!walkable(x, y) || blocked[(size_t)y * gw + x]) { clr[(size_t)y * gw + x] = 0; q.push({ x, y }); }
+			const glm::ivec2 nb[4] = { {1,0},{-1,0},{0,1},{0,-1} };
+			while (!q.empty())
+			{
+				auto cur = q.front(); q.pop();
+				int d = clr[(size_t)cur.y * gw + cur.x];
+				if (d >= 30) continue;
+				for (auto& dd : nb)
+				{
+					glm::ivec2 nn = cur + dd;
+					if (nn.x < 0 || nn.y < 0 || nn.x >= gw || nn.y >= gh || clr[(size_t)nn.y * gw + nn.x] != -1) continue;
+					clr[(size_t)nn.y * gw + nn.x] = d + 1;
+					q.push(nn);
+				}
+			}
+		}
+		auto clearance = [&](int x, int y) { int v = clr[(size_t)y * gw + x]; return v < 0 ? 30 : v; };
+
+		std::vector<glm::ivec2> cands;
+		for (int y = 3; y < gh; y += 6)
+			for (int x = 3; x < gw; x += 6)
+			{
+				auto w = cellWorld(x, y);
+				if (clearance(x, y) >= 3 && w.x >= x0 && w.x <= x1 && w.y >= z0 && w.y <= z1)
+					cands.push_back({ x, y });
+			}
+		if (cands.size() < 8)
+		{
+			msg = "No roads found (walkable ground away from large models), used the city preset instead.";
+			return false;
+		}
+		// centre of the spiral: the road cell closest to the map centre
+		glm::ivec2 c0 = cands[0];
+		for (auto& cc : cands)
+			if (glm::distance(cellWorld(cc.x, cc.y), mapC) < glm::distance(cellWorld(c0.x, c0.y), mapC)) c0 = cc;
+		const glm::vec2 centreW = cellWorld(c0.x, c0.y);
+		// tour waypoints spread over the map, away from the centre
+		std::vector<glm::ivec2> far2;
+		for (auto& cc : cands) if (glm::distance(cellWorld(cc.x, cc.y), centreW) > 120.0f) far2.push_back(cc);
+		if (far2.size() < 3)
+		{
+			msg = "The roads are too small for the city road preset, used the city preset instead.";
+			return false;
+		}
+		std::vector<glm::ivec2> chosen;
+		{
+			size_t startI = 0;
+			for (size_t k = 1; k < far2.size(); k++)
+			{
+				auto a = cellWorld(far2[k].x, far2[k].y), b = cellWorld(far2[startI].x, far2[startI].y);
+				if (gp.startSide != 0 ? glm::dot(a, dirV) < glm::dot(b, dirV) : glm::distance(a, centreW) > glm::distance(b, centreW))
+					startI = k;
+			}
+			chosen.push_back(far2[startI]);
+			while (chosen.size() < 6 && chosen.size() < far2.size())
+			{
+				float bestD = -1; glm::ivec2 best = far2[0];
+				for (auto& cc : far2)
+				{
+					float md = 1e30f;
+					for (auto& ch : chosen) md = glm::min(md, glm::distance(glm::vec2(cc), glm::vec2(ch)));
+					if (md > bestD) { bestD = md; best = cc; }
+				}
+				chosen.push_back(best);
+			}
+		}
+		std::vector<glm::ivec2> order;		// nearest-neighbour tour, ending at the centre
+		order.push_back(chosen[0]);
+		chosen.erase(chosen.begin());
+		while (!chosen.empty())
+		{
+			size_t best = 0;
+			for (size_t k = 1; k < chosen.size(); k++)
+				if (glm::distance(glm::vec2(chosen[k]), glm::vec2(order.back())) < glm::distance(glm::vec2(chosen[best]), glm::vec2(order.back()))) best = k;
+			order.push_back(chosen[best]);
+			chosen.erase(chosen.begin() + best);
+		}
+		order.push_back(c0);
+
+		// shortest path that prefers the middle of the road (Dijkstra)
+		auto shortest = [&](glm::ivec2 a, glm::ivec2 b, std::vector<glm::vec2>& out)
+		{
+			std::vector<float> dist((size_t)gw * gh, 1e30f);
+			std::vector<int> prev((size_t)gw * gh, -1);
+			using Item = std::pair<float, int>;
+			std::priority_queue<Item, std::vector<Item>, std::greater<Item>> pq;
+			dist[(size_t)a.y * gw + a.x] = 0;
+			pq.push({ 0.0f, a.y * gw + a.x });
+			const glm::ivec2 nb[4] = { {1,0},{-1,0},{0,1},{0,-1} };
+			bool found = false;
+			while (!pq.empty())
+			{
+				auto [d, idx] = pq.top(); pq.pop();
+				if (d > dist[idx]) continue;
+				if (idx == b.y * gw + b.x) { found = true; break; }
+				glm::ivec2 cur(idx % gw, idx / gw);
+				for (auto& dd : nb)
+				{
+					glm::ivec2 nn = cur + dd;
+					if (!walkable(nn.x, nn.y) || clearance(nn.x, nn.y) < 2) continue;
+					float cost = d + 1.0f + 8.0f / (1.0f + clearance(nn.x, nn.y));
+					if (cost < dist[(size_t)nn.y * gw + nn.x])
+					{
+						dist[(size_t)nn.y * gw + nn.x] = cost;
+						prev[(size_t)nn.y * gw + nn.x] = idx;
+						pq.push({ cost, nn.y * gw + nn.x });
+					}
+				}
+			}
+			if (!found) return false;
+			std::vector<glm::vec2> leg;
+			for (int cur = b.y * gw + b.x; cur != -1; cur = prev[cur])
+				leg.push_back(cellWorld(cur % gw, cur / gw));
+			std::reverse(leg.begin(), leg.end());
+			for (size_t i = 0; i < leg.size(); i += 3)
+				out.push_back(leg[i]);
+			out.push_back(leg.back());
+			return true;
+		};
+		auto buildRoute = [&](const std::vector<glm::ivec2>& wps, Poly& poly, std::vector<float>& poiS)
+		{
+			std::vector<size_t> wpIdx;
+			for (size_t k = 0; k + 1 < wps.size(); k++)
+			{
+				if (shortest(wps[k], wps[k + 1], poly.pts))
+					wpIdx.push_back(poly.pts.size() - 1);
+			}
+			poly.build();
+			for (size_t i : wpIdx)
+				if (i + 1 < poly.pts.size())
+					poiS.push_back(poly.cum[i] / glm::max(0.0001f, poly.cum.back()));
+			poly.smooth(2, 2);
+			poly.build();
+		};
+		Poly tourA, tourB;
+		std::vector<float> poiA, poiB;
+		buildRoute(order, tourA, poiA);
+		if (tourA.pts.size() < 4)
+		{
+			msg = "Could not connect the roads, used the city preset instead.";
+			return false;
+		}
+		bool loop = gp.loop;
+		if (loop)
+		{
+			std::vector<glm::ivec2> back = { c0, order[0] };
+			buildRoute(back, tourB, poiB);
+			if (tourB.pts.size() < 3) loop = false;
+		}
+
+		// phases (fractions of the total duration)
+		struct Phase { int kind; float t0, t1; };		// 0 tour A, 1 spiral, 2 zoom out, 3 zoom in, 4 tour B
+		std::vector<Phase> phases;
+		float fr[5] = { 0.55f, 0.20f, 0.12f, 0.13f, 0.0f };
+		if (loop) { fr[0] = 0.40f; fr[1] = 0.17f; fr[2] = 0.10f; fr[3] = 0.11f; fr[4] = 0.22f; }
+		float acc = 0.0f;
+		for (int k = 0; k < 5; k++)
+			if (fr[k] > 0)
+			{
+				phases.push_back({ k, acc * gp.duration, (acc + fr[k]) * gp.duration });
+				acc += fr[k];
+			}
+
+		const float rE = glm::clamp(0.12f * glm::min(x1 - x0, z1 - z0), 80.0f, 400.0f);
+		const float rFar = rE * 3.0f;
+		const float roadH = gp.height;
+		auto smooth01 = [](float u) { u = glm::clamp(u, 0.0f, 1.0f); return u * u * (3 - 2 * u); };
+		auto clampW = [&](glm::vec2 p) { return glm::clamp(p, glm::vec2(W * 0.02f, D * 0.02f), glm::vec2(W * 0.98f, D * 0.98f)); };
+
+		// altitude along a road: low, following the ground gently
+		auto roadAltitude = [&](const Poly& pl)
+		{
+			const int K = 300;
+			std::vector<float> y(K + 1), sm(K + 1);
+			for (int k = 0; k <= K; k++)
+			{
+				glm::vec2 xz = pl.at(k / (float)K);
+				y[k] = groundMax(gnd, xz.x, xz.y, 8.0f, cg) + roadH;
+			}
+			for (int pass = 0; pass < 2; pass++)
+			{
+				for (int k = 0; k <= K; k++)
+				{
+					float sum = 0; int n = 0;
+					for (int j = glm::max(0, k - 8); j <= glm::min(K, k + 8); j++) { sum += y[j]; n++; }
+					sm[k] = sum / n;
+				}
+				y = sm;
+			}
+			return std::function<float(float)>([y, K](float s) {
+				float f = glm::clamp(s, 0.0f, 1.0f) * K; int k0 = glm::min(K - 1, (int)f);
+				return glm::mix(y[k0], y[k0 + 1], f - k0); });
+		};
+		auto altA = roadAltitude(tourA);
+		std::function<float(float)> altB;
+		if (loop) altB = roadAltitude(tourB);
+		const float strength = glm::clamp(gp.pacing / 100.0f, 0.0f, 1.0f);
+		auto remapA = buildRemap(tourA, poiA, strength, 0.4f, 1.5f);
+		std::function<float(float)> remapB;
+		if (loop) remapB = buildRemap(tourB, poiB, strength, 0.4f, 1.5f);
+
+		const float groundC = groundAt(gnd, centreW.x, centreW.y, cg);
+		const glm::vec3 centreP(centreW.x, groundC + roadH, centreW.y);
+		auto headingAt = [&](const Poly& pl, float s) {
+			glm::vec2 h = pl.at(glm::min(1.0f, s + 0.02f)) - pl.at(glm::max(0.0f, s - 0.02f));
+			return glm::length(h) > 0.001f ? glm::normalize(h) : dirV;
+		};
+		const glm::vec2 endHeadA = headingAt(tourA, 1.0f);
+		const glm::vec2 startHeadB = loop ? headingAt(tourB, 0.0f) : endHeadA;
+		auto rot2 = [](glm::vec2 v, float a) { return glm::vec2(v.x * std::cos(a) - v.y * std::sin(a), v.x * std::sin(a) + v.y * std::cos(a)); };
+		const float th0 = std::atan2(endHeadA.y, endHeadA.x);
+
+		// camera position and look-at target for a phase at local progress u (0..1)
+		auto sample = [&](const Phase& ph, float u, glm::vec3& pos, glm::vec3& tgt)
+		{
+			const float phDur = ph.t1 - ph.t0;
+			if (ph.kind == 0 || ph.kind == 4)
+			{
+				const Poly& pl = ph.kind == 0 ? tourA : tourB;
+				auto& remap = ph.kind == 0 ? remapA : remapB;
+				auto& alt = ph.kind == 0 ? altA : altB;
+				float s = remap(u);
+				glm::vec2 here = pl.at(s);
+				pos = glm::vec3(here.x, alt(s), here.y);
+				float la = glm::clamp(3.0f / glm::max(1.0f, phDur), 0.02f, 0.25f);
+				glm::vec2 q = pl.at(glm::min(1.0f, s + la));
+				glm::vec2 hd = headingAt(pl, s);
+				glm::vec2 dir = q - here;
+				if (glm::length(dir) < 1.0f) dir = hd * 40.0f;
+				float dist = glm::max(40.0f, glm::length(dir));
+				float ang = 0.0f;
+				if (gp.look == 0) ang = 0.45f * std::sin(6.2831853f * u * 3.0f) * glm::sin(3.14159265f * glm::clamp(u, 0.0f, 1.0f));		// gentle look left / right at the shop fronts
+				else if (gp.look == 1) ang = 1.5707963f;
+				else if (gp.look == 2) ang = -1.5707963f;
+				else if (gp.look == 3) ang = 3.14159265f;
+				else if (gp.look == 5) ang = (u - 0.5f) * 2.0f * 1.15f * sgn;
+				glm::vec2 d2 = rot2(glm::normalize(gp.look == 0 ? dir : hd), ang) * (gp.look == 0 ? dist : glm::max(60.0f, roadH * 3.0f));
+				float pitch = glm::radians(8.0f + 3.0f * std::sin(6.2831853f * u));
+				tgt = glm::vec3(here.x + d2.x, pos.y - glm::length(d2) * std::tan(pitch), here.y + d2.y);
+			}
+			else
+			{
+				float r, y, th;
+				glm::vec3 look(centreW.x, groundC + roadH * 1.5f, centreW.y);
+				glm::vec3 aheadTgt(centreW.x + (ph.kind == 3 ? startHeadB.x : endHeadA.x) * 90.0f, centreP.y - 6.0f, centreW.y + (ph.kind == 3 ? startHeadB.y : endHeadA.y) * 90.0f);
+				if (ph.kind == 1)			// spiral outwards from the road, rising
+				{
+					float e = smooth01(u);
+					r = rE * e;
+					y = glm::mix(centreP.y, groundC + roadH * 4.0f, e);
+					th = th0 + sgn * 6.2831853f * 1.25f * u;
+				}
+				else if (ph.kind == 2)		// zoom out
+				{
+					float e = smooth01(u);
+					r = glm::mix(rE, rFar, e);
+					y = glm::mix(groundC + roadH * 4.0f, groundC + glm::max(roadH * 8.0f, 0.55f * rFar), e);
+					th = th0 + sgn * (6.2831853f * 1.25f + 0.6f * e);
+				}
+				else						// zoom in, back down to the road at the centre
+				{
+					float e = smooth01(u);
+					r = glm::mix(rFar, 0.0f, e);
+					y = glm::mix(groundC + glm::max(roadH * 8.0f, 0.55f * rFar), centreP.y, e);
+					th = th0 + sgn * (6.2831853f * 1.25f + 0.6f + 1.2f * e);
+				}
+				glm::vec2 p2 = clampW(glm::vec2(centreW.x + r * std::cos(th), centreW.y + r * std::sin(th)));
+				pos = glm::vec3(p2.x, y, p2.y);
+				float blend = smooth01(r / (0.35f * rE));		// near the road look along it, further out look at the centre
+				tgt = glm::mix(aheadTgt, look, blend);
+			}
+		};
+
+		// emit keyframes
+		const float kps = glm::max(0.3f, gp.keysPerSec);
+		std::vector<float> times;
+		std::vector<glm::vec3> pos, tgt;
+		for (size_t pi = 0; pi < phases.size(); pi++)
+		{
+			auto& ph = phases[pi];
+			float ks = (ph.kind == 0 || ph.kind == 4) ? kps : glm::max(kps, 1.2f);
+			int n = glm::max(3, (int)std::round((ph.t1 - ph.t0) * ks));
+			for (int k = 0; k < n; k++)
+			{
+				float u = k / (float)n;
+				glm::vec3 p, t;
+				sample(ph, u, p, t);
+				times.push_back(ph.t0 + u * (ph.t1 - ph.t0));
+				pos.push_back(p);
+			}
+		}
+		{
+			glm::vec3 p, t;
+			sample(phases.back(), 1.0f, p, t);
+			times.push_back(gp.duration);
+			pos.push_back(p);
+		}
+		auto& posTrack = rsw->cinematicTracks[0];
+		auto& tgtTrack = rsw->cinematicTracks[1];
+		posTrack.frames.clear();
+		tgtTrack.frames.clear();
+		const size_t NP = pos.size();
+		for (size_t i = 0; i < NP; i++)
+		{
+			size_t a = i == 0 ? 0 : i - 1, b = i + 1 < NP ? i + 1 : i;
+			glm::vec3 v = (pos[b] - pos[a]) / glm::max(0.0001f, times[b] - times[a]);
+			float dtAvg = 0.5f * ((i > 0 ? times[i] - times[i - 1] : times[1] - times[0]) + (i + 1 < NP ? times[i + 1] - times[i] : times[i] - times[i - 1]));
+			posTrack.frames.push_back(new PosFrame(times[i], std::pair<glm::vec3, glm::vec3>(pos[i], v * dtAvg)));
+		}
+		const int M = glm::max(2, (int)std::ceil(gp.duration / 0.5f));
+		for (int j = 0; j <= M; j++)
+		{
+			float t = gp.duration * j / (float)M;
+			const Phase* ph = &phases.back();
+			for (auto& p : phases) if (t < p.t1) { ph = &p; break; }
+			glm::vec3 p, tg;
+			sample(*ph, glm::clamp((t - ph->t0) / glm::max(0.0001f, ph->t1 - ph->t0), 0.0f, 1.0f), p, tg);
+			tgtTrack.frames.push_back(new TgtFrame(t, Rsw::CameraTarget(tg, 1.0f)));
+		}
+		rsw->cinematicLength = gp.duration;
+		return true;
+	}
+
 	// Builds the keyframes of an automatic shot. Returns a message when it had to fall back to another preset.
 	std::string generateCinematic(Rsw* rsw, MapView* mv, GenParams gp)
 	{
 		std::string msg;
+		if (gp.preset == 11)
+		{
+			if (generateCityRoad(rsw, mv, gp, msg))
+				return msg;
+			gp.preset = 1;		// fall back to the plain city tour
+		}
 		auto gnd = mv->map->rootNode->getComponent<Gnd>();
 		auto gat = mv->map->rootNode->getComponent<Gat>();
 		const float W = gnd->width * 10.0f, D = gnd->height * 10.0f;
@@ -1115,11 +1539,11 @@ void BrowEdit::showCinematicModeWindow()
 		static GenParams gp;
 		static int lastPreset = 0;
 		static std::string resultMsg;
-		if (ImGui::Combo("Preset", &gp.preset, "Field (tour of the best spots)\0City (tour of the busiest areas)\0Dungeon (walk the corridors)\0Orbit around the centre\0Diagonal sweep\0Reveal (pull in on a point)\0Spiral descent\0Crane (rise and pull back)\0Side tracking shot\0Top-down pan\0Low fly-by\0"))
+		if (ImGui::Combo("Preset", &gp.preset, "Field (tour of the best spots)\0City (tour of the busiest areas)\0Dungeon (walk the corridors)\0Orbit around the centre\0Diagonal sweep\0Reveal (pull in on a point)\0Spiral descent\0Crane (rise and pull back)\0Side tracking shot\0Top-down pan\0Low fly-by\0City road (street level, spiral at the centre)\0"))
 		{
-			static const float defH[] = { 90, 60, 22, 80, 50, 60, 70, 40, 45, 250, 25 };
-			static const float defD[] = { 40, 45, 45, 30, 25, 20, 30, 20, 30, 30, 18 };
-			static const int defLook[] = { 0, 0, 0, 0, 0, 0, 0, 0, 1, 0, 0 };
+			static const float defH[] = { 90, 60, 22, 80, 50, 60, 70, 40, 45, 250, 25, 20 };
+			static const float defD[] = { 40, 45, 45, 30, 25, 20, 30, 20, 30, 30, 18, 70 };
+			static const int defLook[] = { 0, 0, 0, 0, 0, 0, 0, 0, 1, 0, 0, 0 };
 			gp.height = defH[gp.preset];
 			gp.duration = defD[gp.preset];
 			gp.look = defLook[gp.preset];
@@ -1131,7 +1555,7 @@ void BrowEdit::showCinematicModeWindow()
 		if (ImGui::IsItemHovered()) ImGui::SetTooltip("Stays this far away from the map edges and corners, they are rarely worth showing");
 		if (gp.preset == 3 || gp.preset == 5 || gp.preset == 6 || gp.preset == 7)
 			ImGui::SliderFloat("Size (%)", &gp.radius, 20.0f, 100.0f, "%.0f");
-		if (gp.preset == 0 || gp.preset == 1 || gp.preset == 2)
+		if (gp.preset == 0 || gp.preset == 1 || gp.preset == 2 || gp.preset == 11)
 		{
 			ImGui::SliderFloat("Pacing (slow-mo)", &gp.pacing, 0.0f, 100.0f, "%.0f%%");
 			if (ImGui::IsItemHovered()) ImGui::SetTooltip("Slow motion near the interesting spots / tight turns, faster in between. 0 = constant speed");
