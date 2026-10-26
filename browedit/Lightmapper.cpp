@@ -61,7 +61,7 @@ void Lightmapper::begin()
 			c->dirty = true;
 
 	auto& settings = rsw->lightmapSettings;
-	bool runOnGpu = settings.runOnGpu && !settings.softShadows && LightmapperGpu::canRunGpu();
+	bool runOnGpu = settings.runOnGpu && LightmapperGpu::canRunGpu();
 	
 	if (runOnGpu) {
 		// Can't really run on its own thread since it requires gl commands.

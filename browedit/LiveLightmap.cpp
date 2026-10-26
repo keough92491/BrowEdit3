@@ -106,6 +106,8 @@ bool BrowEdit::liveBake(Map* map)
 	st.rangeX = glm::ivec2(0, gnd->width); st.rangeY = glm::ivec2(0, gnd->height);
 	st.heightSelectionOnly = false;
 	st.quality = glm::max(1, glm::min(st.quality, liveLightmapQuality));
+	int softSamples = st.softSamples;
+	st.softSamples = glm::min(st.softSamples, 12);		// the live bake stays quick; the full lightmap uses all of them
 
 	// Only touch the tile/lightmap structure when a tile has no lightmap of its own (new tiles after a terrain edit).
 	if (!lightmapsAreUnique(gnd))
@@ -130,7 +132,7 @@ bool BrowEdit::liveBake(Map* map)
 			c->dirty = true;
 	util::ResourceManager<Image>::clear();
 
-	st.rangeX = rangeX; st.rangeY = rangeY; st.heightSelectionOnly = sel; st.quality = quality;
+	st.rangeX = rangeX; st.rangeY = rangeY; st.heightSelectionOnly = sel; st.quality = quality; st.softSamples = softSamples;
 	return true;
 }
 
