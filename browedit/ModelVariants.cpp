@@ -11,6 +11,10 @@
 #include <browedit/util/Util.h>
 #include <browedit/util/ResourceManager.h>
 #include <browedit/gl/Texture.h>
+#include <browedit/math/Ray.h>
+#include <browedit/components/RsmRenderer.h>
+#include <browedit/shaders/SimpleShader.h>
+#include <browedit/gl/FBO.h>
 #include <imgui.h>
 #include <misc/cpp/imgui_stdlib.h>
 #include <glad/gl.h>
@@ -141,6 +145,7 @@ namespace modelvariants
 		float brushColor[3] = { 0.8f, 0.2f, 0.1f };
 		int brushMode = 0;				// 0 colour, 1 stamp texture
 		bool onlyUv = true, showUv = true, livePreview = true, eraseMode = false;
+		bool paint3d = false;
 		std::string stampTex;
 		float stampTiling = 1.0f;
 		ImVec2 pan(0, 0);
@@ -291,7 +296,8 @@ namespace modelvariants
 
 		void drawPaintUi(Rsm* rsm)
 		{
-			ImGui::TextWrapped("Paint straight on a texture of the model. The UV lines show where the model's faces sit, so you can see what you are painting. With 'Preview on the model' on, the model in the map shows the paint live; nothing is saved until you press Generate variant.");
+			ImGui::Checkbox("Paint in the 3D view (switch to Advanced Texture mode: left paints on the model, Ctrl or right erases)", &paint3d);
+		ImGui::TextWrapped("Paint straight on a texture of the model. The UV lines show where the model's faces sit, so you can see what you are painting. With 'Preview on the model' on, the model in the map shows the paint live; nothing is saved until you press Generate variant.");
 			if (ImGui::BeginCombo("Texture", paintCur.empty() ? "(choose)" : util::iso_8859_1_to_utf8(paintCur).c_str()))
 			{
 				for (auto& t : rsm->textures)
@@ -400,6 +406,129 @@ namespace modelvariants
 			if (!ok) { err = "Cannot write " + path; return false; }
 			return true;
 		}
+	}
+
+	// ---------------------------------------------------------------- painting in the 3D view (Advanced Texture mode)
+	namespace
+	{
+		struct Hit { bool ok = false; float t = 1e30f; glm::vec3 world, normal; std::string tex; glm::vec2 px; float wpp = 1.0f; Rsm* rsm = nullptr; int texIndex = -1; };
+
+		Hit pickModel(MapView* mv)
+		{
+			Hit best;
+			mv->map->rootNode->traverse([&](Node* n)
+				{
+					auto m = n->getComponent<RswModel>();
+					auto rsm = n->getComponent<Rsm>();
+					auto rr = n->getComponent<RsmRenderer>();
+					if (!m || !rsm || !rr || !rsm->loaded || !rsm->rootMesh) return;
+					if ("data\\model\\" + util::utf8_to_iso_8859_1(m->fileName) != srcModel) return;
+					if (!m->aabb.hasRayCollision(mv->mouseRay, 0, 10000000)) return;
+					rsm->rootMesh->foreach([&](Rsm::Mesh* mesh)
+						{
+							if (mesh->index >= rr->renderInfo.size()) return;
+							glm::mat4 mat = rr->matrixCache * rr->renderInfo[mesh->index].matrix;
+							glm::mat4 inv = glm::inverse(mat);
+							math::Ray r(mv->mouseRay * inv);
+							for (auto& f : mesh->faces)
+							{
+								if (f.texId < 0 || f.texId >= (int)mesh->textures.size()) continue;
+								glm::vec3 v0 = mesh->vertices[f.vertexIds[0]], v1 = mesh->vertices[f.vertexIds[1]], v2 = mesh->vertices[f.vertexIds[2]];
+								glm::vec3 e1 = v1 - v0, e2 = v2 - v0, pv = glm::cross(r.dir, e2);
+								float det = glm::dot(e1, pv);
+								if (std::fabs(det) < 1e-9f) continue;
+								float inv_det = 1.0f / det;
+								glm::vec3 tv = r.origin - v0;
+								float b1 = glm::dot(tv, pv) * inv_det;
+								if (b1 < 0 || b1 > 1) continue;
+								glm::vec3 qv = glm::cross(tv, e1);
+								float b2 = glm::dot(r.dir, qv) * inv_det;
+								if (b2 < 0 || b1 + b2 > 1) continue;
+								float t = glm::dot(e2, qv) * inv_det;
+								if (t <= 0) continue;
+								glm::vec3 wp = glm::vec3(mat * glm::vec4(r.origin + t * r.dir, 1.0f));
+								float wt = glm::length(wp - mv->mouseRay.origin);
+								if (wt >= best.t) continue;
+								if (f.texCoordIds[0] >= mesh->texCoords.size() || f.texCoordIds[1] >= mesh->texCoords.size() || f.texCoordIds[2] >= mesh->texCoords.size()) continue;
+								glm::vec2 uv0 = mesh->texCoords[f.texCoordIds[0]], uv1 = mesh->texCoords[f.texCoordIds[1]], uv2 = mesh->texCoords[f.texCoordIds[2]];
+								int ti = mesh->textures[f.texId];
+								if (ti < 0 || ti >= (int)rsm->textures.size()) continue;
+								glm::vec3 w0 = glm::vec3(mat * glm::vec4(v0, 1)), w1 = glm::vec3(mat * glm::vec4(v1, 1)), w2 = glm::vec3(mat * glm::vec4(v2, 1));
+								best.ok = true; best.t = wt; best.world = wp; best.rsm = rsm; best.texIndex = ti; best.tex = rsm->textures[ti];
+								glm::vec3 nrm = glm::cross(w1 - w0, w2 - w0);
+								float worldArea = glm::length(nrm) * 0.5f;
+								best.normal = glm::length(nrm) > 1e-9f ? glm::normalize(nrm) : glm::vec3(0, 1, 0);
+								glm::vec2 uvp = (1 - b1 - b2) * uv0 + b1 * uv1 + b2 * uv2;
+								best.px = uvp;		// converted to pixels by the caller
+								float uvArea = std::fabs((uv1.x - uv0.x) * (uv2.y - uv0.y) - (uv2.x - uv0.x) * (uv1.y - uv0.y)) * 0.5f;
+								best.wpp = uvArea > 1e-9f ? std::sqrt(worldArea / uvArea) : 0.0f;		// world units per uv unit; divided by the texture size below
+							}
+						});
+				});
+			return best;
+		}
+
+		void drawRing(MapView* mv, const glm::vec3& c, const glm::vec3& n, float radius)
+		{
+			glm::vec3 a = std::fabs(n.y) < 0.9f ? glm::normalize(glm::cross(n, glm::vec3(0, 1, 0))) : glm::normalize(glm::cross(n, glm::vec3(1, 0, 0)));
+			glm::vec3 b = glm::cross(n, a);
+			std::vector<float> v;
+			for (int i = 0; i < 40; i++)
+			{
+				float an = i / 40.0f * 6.2831853f;
+				glm::vec3 p = c + (a * std::cos(an) + b * std::sin(an)) * radius + n * 0.3f;
+				v.insert(v.end(), { p.x, p.y, p.z, 0, 0 });
+			}
+			mv->simpleShader->use();
+			mv->simpleShader->setUniform(SimpleShader::Uniforms::projectionMatrix, mv->nodeRenderContext.projectionMatrix);
+			mv->simpleShader->setUniform(SimpleShader::Uniforms::viewMatrix, mv->nodeRenderContext.viewMatrix);
+			mv->simpleShader->setUniform(SimpleShader::Uniforms::modelMatrix, glm::mat4(1.0f));
+			mv->simpleShader->setUniform(SimpleShader::Uniforms::textureFac, 0.0f);
+			mv->simpleShader->setUniform(SimpleShader::Uniforms::color, glm::vec4(0.2f, 0.9f, 1.0f, 1.0f));
+			mv->fbo->bind();
+			glBindBuffer(GL_ARRAY_BUFFER, 0);
+			glDisable(GL_TEXTURE_2D);
+			glDisable(GL_DEPTH_TEST);
+			glEnableVertexAttribArray(0); glEnableVertexAttribArray(1);
+			glDisableVertexAttribArray(2); glDisableVertexAttribArray(3); glDisableVertexAttribArray(4);
+			glVertexAttribPointer(0, 3, GL_FLOAT, false, 5 * sizeof(float), &v[0]);
+			glVertexAttribPointer(1, 2, GL_FLOAT, false, 5 * sizeof(float), &v[3]);
+			glLineWidth(2);
+			glDrawArrays(GL_LINE_LOOP, 0, (int)(v.size() / 5));
+			glLineWidth(1);
+			glEnable(GL_DEPTH_TEST);
+			mv->fbo->unbind();
+		}
+	}
+
+	// true while the brush owns the 3D view (Advanced Texture mode, "Paint in the 3D view" ticked)
+	bool postRender(MapView* mv, BrowEdit* be)
+	{
+		if (!visible || !paint3d || srcModel.empty() || !mv->map) return false;
+		auto& io = ImGui::GetIO();
+		Hit h = mv->hovered ? pickModel(mv) : Hit();
+		if (h.ok)
+		{
+			auto pt = getPaint(h.rsm, h.tex, h.texIndex);
+			if (pt)
+			{
+				h.px = glm::vec2(h.px.x * pt->w, h.px.y * pt->h);
+				float wpp = h.wpp / (float)std::max(pt->w, pt->h);
+				drawRing(mv, h.world, h.normal, std::max(0.05f, brushSize * 0.5f * wpp));
+				bool lDown = ImGui::IsMouseDown(ImGuiMouseButton_Left), rDown = ImGui::IsMouseDown(ImGuiMouseButton_Right);
+				if ((lDown || rDown) && !io.WantCaptureMouse)
+				{
+					bool erase = rDown || io.KeyCtrl;
+					if (!painting) { painting = true; pt->undo.push_back(pt->overlay); if (pt->undo.size() > 15) pt->undo.erase(pt->undo.begin()); }
+					paintCur = h.tex;
+					stamp(*pt, h.px.x, h.px.y, erase);
+				}
+				else painting = false;
+				if (pt->dirtyModel && livePreview) { uploadToModelTexture(h.tex, pt->comp, pt->w, pt->h); previewActive = true; pt->dirtyModel = false; }
+			}
+		}
+		else painting = false;
+		return true;
 	}
 
 	void showWindow(BrowEdit* be)

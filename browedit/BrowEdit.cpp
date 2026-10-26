@@ -642,7 +642,10 @@ void BrowEdit::showMapWindow(MapView& mapView, float deltaTime)
 				else if (editMode == EditMode::Water)
 					mapView.postRenderWaterMode(this);
 				else if (editMode == EditMode::AdvTexture)
-					advtex::postRender(&mapView, this);
+					{
+						if (!modelvariants::postRender(&mapView, this))
+							advtex::postRender(&mapView, this);
+					}
 				else if (editMode == EditMode::Sprite)
 					sprite::System::instance().postRender(&mapView, this);
 			}
