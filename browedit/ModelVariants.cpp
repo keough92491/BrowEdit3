@@ -414,7 +414,7 @@ namespace modelvariants
 		// source: the first selected model, or typed in
 		if (ImGui::Button("Use selected model"))
 			for (auto n : map->selectedNodes)
-				if (auto m = n->getComponent<RswModel>()) { { resetPaint(); srcModel = "data\\model\\" + util::utf8_to_iso_8859_1(m->fileName); thumbsDirty = true; enabled.clear(); break; }
+				if (auto m = n->getComponent<RswModel>()) { resetPaint(); srcModel = "data\\model\\" + util::utf8_to_iso_8859_1(m->fileName); thumbsDirty = true; enabled.clear(); break; }
 		ImGui::SameLine();
 		ImGui::TextWrapped("%s", srcModel.empty() ? "Select a model in the map, then press the button" : util::iso_8859_1_to_utf8(srcModel).c_str());
 		if (srcModel.empty()) { ImGui::End(); return; }
