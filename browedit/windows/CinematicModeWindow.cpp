@@ -47,6 +47,9 @@ namespace
 		bool clockwise = true;
 		float keysPerSec = 0.6f;
 		bool useViewCenter = false;
+		float pacing = 70;		// slow-motion strength (percent) for field / city / dungeon
+		int startSide = 0;		// 0 auto, 1 from west, 2 from east, 3 from north, 4 from south
+		int look = 0;			// 0 ahead, 1 sideways left, 2 sideways right, 3 looking back, 4 focus on spots, 5 pan sweep
 	};
 
 	Rsw::KeyFrame* cloneFrame(Rsw::KeyFrame* f)
@@ -303,10 +306,27 @@ namespace
 		Poly poly;
 		const float sgn = gp.clockwise ? 1.0f : -1.0f;
 		int preset = gp.preset;
+		glm::vec2 dirV = spanX >= spanZ ? glm::vec2(1, 0) : glm::vec2(0, 1);
+		if (gp.startSide == 1) dirV = glm::vec2(1, 0);
+		else if (gp.startSide == 2) dirV = glm::vec2(-1, 0);
+		else if (gp.startSide == 3) dirV = glm::vec2(0, 1);
+		else if (gp.startSide == 4) dirV = glm::vec2(0, -1);
+		if (!gp.clockwise) dirV = -dirV;
+		const glm::vec2 latV(-dirV.y, dirV.x);
+		const float Lh = (std::abs(dirV.x) > 0.5f ? spanX : spanZ) * 0.5f;
+		const float Ls = (std::abs(dirV.x) > 0.5f ? spanZ : spanX) * 0.5f;
+		bool topDown = false;
 
-		if (preset == 1)	// city: tour the busiest clusters of objects
+		struct Poi { float s; float w; glm::vec2 pos; };
+		std::vector<Poi> pois;
+		bool pace = false, cornerSlow = false, aimAtPoi = false;
+		float slowSpeed = 0.4f, fastSpeed = 1.5f;
+
+		// busiest / most interesting spots: object clusters and rough terrain, spaced apart from each other
+		auto hotspots = [&](int K, float wo, float wt, float bin)
 		{
-			std::map<std::pair<int, int>, std::pair<glm::vec2, int>> bins;
+			struct B { glm::vec2 sum = glm::vec2(0); int n = 0; };
+			std::map<std::pair<int, int>, B> bins;
 			mv->map->rootNode->traverse([&](Node* n)
 			{
 				if (!n->getComponent<RswModel>()) return;
@@ -314,29 +334,105 @@ namespace
 				if (!o) return;
 				glm::vec2 p(gnd->width * 5.0f + o->position.x, gnd->height * 5.0f - o->position.z + 10.0f);
 				if (p.x < x0 || p.x > x1 || p.y < z0 || p.y > z1) return;
-				auto& b = bins[{(int)(p.x / 150), (int)(p.y / 150)}];
-				b.first += p;
-				b.second++;
+				auto& b = bins[{(int)(p.x / bin), (int)(p.y / bin)}];
+				b.sum += p;
+				b.n++;
 			});
-			std::vector<std::pair<int, glm::vec2>> ranked;
-			for (auto& b : bins)
-				ranked.push_back({ b.second.second, b.second.first / (float)b.second.second });
-			std::sort(ranked.begin(), ranked.end(), [](auto& a, auto& b) { return a.first > b.first; });
-			if (ranked.size() > 8) ranked.resize(8);
-			if (ranked.size() < 3)
+			int maxN = 1;
+			for (auto& b : bins) maxN = glm::max(maxN, b.second.n);
+			struct Cell { float obj, rough; glm::vec2 pos; };
+			std::vector<Cell> cells;
+			float maxRough = 1.0f;
+			for (int iz = (int)(z0 / bin); iz <= (int)(z1 / bin); iz++)
+				for (int ix = (int)(x0 / bin); ix <= (int)(x1 / bin); ix++)
+				{
+					glm::vec2 cc((ix + 0.5f) * bin, (iz + 0.5f) * bin);
+					if (cc.x < x0 || cc.x > x1 || cc.y < z0 || cc.y > z1) continue;
+					Cell cell{ 0, 0, cc };
+					auto it = bins.find({ ix, iz });
+					if (it != bins.end() && it->second.n > 0)
+					{
+						cell.obj = it->second.n / (float)maxN;
+						cell.pos = it->second.sum / (float)it->second.n;
+					}
+					if (wt > 0)
+					{
+						float lo = 1e30f, hi = -1e30f;
+						const glm::vec2 offs[5] = { {0,0},{1,1},{-1,1},{1,-1},{-1,-1} };
+						for (auto& o : offs)
+						{
+							float g = groundAt(gnd, cc.x + o.x * bin / 3, cc.y + o.y * bin / 3, cg);
+							lo = glm::min(lo, g); hi = glm::max(hi, g);
+						}
+						cell.rough = hi - lo;
+						maxRough = glm::max(maxRough, cell.rough);
+					}
+					cells.push_back(cell);
+				}
+			std::vector<std::pair<float, glm::vec2>> scored;
+			for (auto& cell : cells)
+				scored.push_back({ wo * cell.obj + wt * cell.rough / maxRough, cell.pos });
+			std::sort(scored.begin(), scored.end(), [](auto& a, auto& b) { return a.first > b.first; });
+			std::vector<std::pair<float, glm::vec2>> out;
+			for (auto& sc : scored)
+			{
+				if (sc.first <= 0.0001f || (int)out.size() >= K) break;
+				bool tooClose = false;
+				for (auto& o : out) if (glm::distance(o.second, sc.second) < bin * 1.6f) tooClose = true;
+				if (!tooClose) out.push_back(sc);
+			}
+			return out;
+		};
+		// registers the waypoints (already in path order) as slow-motion spots
+		auto addPois = [&](const std::vector<std::pair<float, glm::vec2>>& ordered)
+		{
+			float mx = 0.0001f;
+			for (auto& o : ordered) mx = glm::max(mx, o.first);
+			for (size_t k = 0; k < ordered.size(); k++)
+				pois.push_back({ poly.cum.back() > 0 ? poly.cum[k] / poly.cum.back() : 0.0f, 0.5f + 0.5f * ordered[k].first / mx, ordered[k].second });
+		};
+		// the spot that is first in the travel direction (or the one farthest from the centre when the start side is automatic)
+		auto startIndex = [&](const std::vector<std::pair<float, glm::vec2>>& v)
+		{
+			size_t best = 0;
+			for (size_t k = 1; k < v.size(); k++)
+			{
+				if (gp.startSide != 0 ? glm::dot(v[k].second, dirV) < glm::dot(v[best].second, dirV)
+					: glm::distance(v[k].second, c) > glm::distance(v[best].second, c))
+					best = k;
+			}
+			return best;
+		};
+		if (preset == 1)	// city: tour the busiest clusters of objects, slowing down in each of them
+		{
+			auto spots = hotspots(8, 1.0f, 0.15f, 150.0f);
+			if (spots.size() < 3)
 			{
 				msg = "Not enough objects for the city preset, used the field preset instead.";
 				preset = 0;
 			}
 			else
 			{
-				std::vector<glm::vec2> w;
-				for (auto& r : ranked) w.push_back(r.second);
-				poly.pts = orderWaypoints(w);
+				size_t startI = startIndex(spots);
+				std::vector<std::pair<float, glm::vec2>> ordered;
+				ordered.push_back(spots[startI]);
+				spots.erase(spots.begin() + startI);
+				while (!spots.empty())
+				{
+					size_t best = 0;
+					for (size_t k = 1; k < spots.size(); k++)
+						if (glm::distance(spots[k].second, ordered.back().second) < glm::distance(spots[best].second, ordered.back().second))
+							best = k;
+					ordered.push_back(spots[best]);
+					spots.erase(spots.begin() + best);
+				}
+				for (auto& o : ordered) poly.pts.push_back(o.second);
 				poly.build();
+				addPois(ordered);
 				poly.smooth(1, 1);
 				poly.build();
 				groundRadius = 30.0f;
+				pace = true; aimAtPoi = true; slowSpeed = 0.45f; fastSpeed = 1.5f;
 			}
 		}
 		if (preset == 2)	// dungeon: walk the walkable cells (breadth first search between waypoints)
@@ -378,6 +474,7 @@ namespace
 			for (auto& ch : chosen) wpf.push_back(glm::vec2(ch));
 			wpf = orderWaypoints(wpf);
 			std::vector<glm::vec2> route;
+			std::vector<size_t> routeWp;
 			std::vector<int> prev((size_t)gw * gh);
 			for (size_t k = 0; k + 1 < wpf.size(); k++)
 			{
@@ -408,6 +505,7 @@ namespace
 				for (size_t i = 0; i < leg.size(); i += 3)
 					route.push_back(leg[i]);
 				route.push_back(leg.back());
+				routeWp.push_back(route.size() - 1);
 			}
 			if (route.size() < 4)
 			{
@@ -418,9 +516,12 @@ namespace
 			{
 				poly.pts = route;
 				poly.build();
+				for (auto idx : routeWp)
+					pois.push_back({ poly.cum[idx] / glm::max(0.0001f, poly.cum.back()), 1.0f, route[idx] });
 				poly.smooth(3, 2);
 				poly.build();
 				groundRadius = 12.0f;
+				pace = true; cornerSlow = true; slowSpeed = 0.35f; fastSpeed = 1.6f;
 			}
 		}
 
@@ -450,16 +551,126 @@ namespace
 			xzAt = [=](float u) { float e = u * u * (3 - 2 * u); float d = glm::mix(farD, nearD, e); return clampXZ(c + d * glm::vec2(std::cos(th + sgn * 0.5f * u), std::sin(th + sgn * 0.5f * u))); };
 			hAt = [](float u) { float e = u * u * (3 - 2 * u); return glm::mix(3.0f, 1.0f, e); };
 		}
-		if (preset == 0 || !xzAt)	// field: long gently swaying pass over the middle of the map
+		else if (preset == 6)	// spiral descent
 		{
-			preset = 0;
-			bool alongX = spanX >= spanZ;
-			glm::vec2 axis = alongX ? glm::vec2(1, 0) : glm::vec2(0, 1);
-			glm::vec2 lat(-axis.y, axis.x);
-			float L = alongX ? spanX : spanZ, Ls = alongX ? spanZ : spanX;
-			xzAt = [=](float u) { return clampXZ(c + axis * ((u - 0.5f) * L * sgn) + lat * (std::sin(u * 6.2831853f) * 0.18f * Ls)); };
+			constTarget = true;
+			float rBig = glm::max(40.0f, gp.radius / 100.0f * half), rSmall = rBig * 0.25f;
+			xzAt = [=](float u) { float th = -1.5707963f + sgn * 6.2831853f * 1.5f * u; float r = glm::mix(rBig, rSmall, u); return clampXZ(c + r * glm::vec2(std::cos(th), std::sin(th))); };
+			hAt = [](float u) { return glm::mix(3.0f, 1.0f, u * u * (3 - 2 * u)); };
+		}
+		else if (preset == 7)	// crane: rise up and pull back while turning around the focus
+		{
+			constTarget = true;
+			float rBig = glm::max(40.0f, gp.radius / 100.0f * half);
+			xzAt = [=](float u) { float e = u * u * (3 - 2 * u); float th = 0.7853982f + sgn * 2.4f * e; float r = glm::mix(rBig * 0.2f, rBig, e); return clampXZ(c + r * glm::vec2(std::cos(th), std::sin(th))); };
+			hAt = [](float u) { float e = u * u * (3 - 2 * u); return glm::mix(0.5f, 3.5f, e); };
+		}
+		else if (preset == 8 || preset == 9 || preset == 10)	// straight passes: side tracking, top-down pan, low fly-by
+		{
+			float off = preset == 10 ? 0.2f * Ls : 0.0f;
+			xzAt = [=](float u) { return clampXZ(c + dirV * ((u - 0.5f) * 2.0f * Lh) + latV * off); };
+			if (preset == 9) { topDown = true; groundRadius = 60.0f; }
+			if (preset == 10) groundRadius = 20.0f;
+			if (preset == 8) hAt = [](float) { return 0.9f; };
+		}
+		else if (preset == 0)	// field: tour the most interesting spots (objects and hills) in a wide arc
+		{
+			auto spots = hotspots(4, 0.6f, 0.4f, 200.0f);
+			if (spots.size() >= 2)
+			{
+				std::sort(spots.begin(), spots.end(), [&](auto& a, auto& b) {
+					return std::atan2(a.second.y - c.y, a.second.x - c.x) < std::atan2(b.second.y - c.y, b.second.x - c.x); });
+				if (!gp.clockwise) std::reverse(spots.begin(), spots.end());
+				std::rotate(spots.begin(), spots.begin() + startIndex(spots), spots.end());
+				poly.pts.clear();
+				for (auto& o : spots) poly.pts.push_back(o.second);
+				poly.build();
+				addPois(spots);
+				poly.smooth(1, 1);
+				poly.build();
+				xzAt = [&](float u) { return poly.at(u); };
+				hAt = [](float u) { return 1.4f - 0.4f * u; };
+				groundRadius = 45.0f;
+				pace = true; aimAtPoi = true; slowSpeed = 0.5f; fastSpeed = 1.3f;
+			}
+		}
+		if (preset == 0 && !xzAt)	// field: long gently swaying pass over the middle of the map
+		{
+			glm::vec2 axis = dirV;
+			glm::vec2 lat = latV;
+			float L = Lh * 2.0f, LsS = Ls * 2.0f;
+			xzAt = [=](float u) { return clampXZ(c + axis * ((u - 0.5f) * L) + lat * (std::sin(u * 6.2831853f) * 0.18f * LsS)); };
 			hAt = [](float u) { return 1.4f - 0.5f * u; };
 			constTarget = false; loop = false;
+		}
+
+		// slow-motion / fast mix: remap time so the camera crawls near points of interest and in tight turns, and speeds up in between
+		std::function<float(float)> slowAt = [](float) { return 0.0f; };
+		std::function<float(float)> camY;		// smooth camera altitude (not used for the dungeon, which hugs the floor)
+		if (pace && gp.pacing > 0.5f && (!pois.empty() || cornerSlow))
+		{
+			const int ST = 600;
+			const float strength = glm::clamp(gp.pacing / 100.0f, 0.0f, 1.0f);
+			std::vector<float> mask(ST + 1, 0.0f), tc(ST + 1, 0.0f);
+			for (int k = 0; k <= ST; k++)
+			{
+				float sp = k / (float)ST, v = 0.0f;
+				for (auto& po : pois)
+				{
+					float d = (sp - po.s) / 0.045f;
+					v = glm::max(v, po.w * std::exp(-d * d));
+				}
+				if (cornerSlow)
+				{
+					glm::vec2 a = poly.at(glm::max(0.0f, sp - 0.012f)), b = poly.at(sp), cc2 = poly.at(glm::min(1.0f, sp + 0.012f));
+					glm::vec2 v1 = b - a, v2 = cc2 - b;
+					if (glm::length(v1) > 0.01f && glm::length(v2) > 0.01f)
+					{
+						float ang = std::acos(glm::clamp(glm::dot(glm::normalize(v1), glm::normalize(v2)), -1.0f, 1.0f));
+						v = glm::max(v, glm::clamp(ang / 0.9f, 0.0f, 1.0f) * 0.7f);
+					}
+				}
+				mask[k] = v;
+			}
+			for (int pass = 0; pass < 3; pass++)		// soften the speed changes
+			{
+				auto m2 = mask;
+				for (int k = 1; k < ST; k++) m2[k] = 0.25f * mask[k - 1] + 0.5f * mask[k] + 0.25f * mask[k + 1];
+				mask = m2;
+			}
+			for (int k = 0; k < ST; k++)
+			{
+				float spd = glm::mix(1.0f, glm::mix(fastSpeed, slowSpeed, mask[k]), strength);
+				tc[k + 1] = tc[k] + 1.0f / spd;
+			}
+			for (auto& t : tc) t /= tc.back();
+			auto sOf = [tc, ST](float tau)
+			{
+				tau = glm::clamp(tau, 0.0f, 1.0f);
+				size_t k = std::upper_bound(tc.begin(), tc.end(), tau) - tc.begin();
+				if (k == 0) return 0.0f;
+				if (k >= tc.size()) return 1.0f;
+				float f = (tau - tc[k - 1]) / glm::max(0.000001f, tc[k] - tc[k - 1]);
+				return ((k - 1) + f) / (float)ST;
+			};
+			auto baseXz = xzAt;
+			auto baseH = hAt;
+			xzAt = [baseXz, sOf](float tau) { return baseXz(sOf(tau)); };
+			slowAt = [mask, sOf, strength, ST](float tau) { return mask[(int)glm::clamp(sOf(tau) * ST, 0.0f, (float)ST)] * strength; };
+			if (aimAtPoi)
+				hAt = [baseH, sOf, slowAt](float tau) { return baseH(sOf(tau)) * (1.1f - 0.45f * slowAt(tau)); };
+			else
+				hAt = [baseH, sOf](float tau) { return baseH(sOf(tau)); };
+			// (pois are in path space; remember the mapping for the focus blend below)
+			auto poisCopy = pois;
+			pois.clear();
+			for (auto& po : poisCopy)
+			{
+				// convert path position back to time so poi positions line up with tau
+				float lo = 0, hi = 1;
+				for (int it = 0; it < 30; it++) { float mid = 0.5f * (lo + hi); if (sOf(mid) < po.s) lo = mid; else hi = mid; }
+				pois.push_back({ 0.5f * (lo + hi), po.w, po.pos });
+			}
 		}
 
 		const int N = glm::max(4, (int)std::round(gp.duration * gp.keysPerSec));
@@ -471,8 +682,49 @@ namespace
 			float g = groundMax(gnd, xz.x, xz.y, groundRadius, cg);
 			P[i] = glm::vec3(xz.x, g + gp.height * hAt(u), xz.y);
 		}
-		for (int i = 1; i < N; i++)
-			P[i].y = glm::max(P[i].y * 0.5f + 0.25f * (P[i - 1].y + P[i + 1].y), groundAt(gnd, P[i].x, P[i].z, cg) + gp.height * 0.3f);
+		if (preset == 2)
+		{
+			for (int i = 1; i < N; i++)
+				P[i].y = glm::max(P[i].y * 0.5f + 0.25f * (P[i - 1].y + P[i + 1].y), groundAt(gnd, P[i].x, P[i].z, cg) + gp.height * 0.3f);
+		}
+		else if (!constTarget || preset == 3 || preset == 6 || preset == 7 || preset == 5)
+		{
+			// natural, steady altitude: take the highest ground in a window, then average over the same window.
+			// The average of the envelope never drops below the ground, and hills turn into long gentle swells instead of bobbing.
+			const int K = glm::max(150, N * 6);
+			std::vector<float> yr(K + 1), env(K + 1), sm(K + 1);
+			for (int k = 0; k <= K; k++)
+			{
+				float tau = k / (float)K;
+				glm::vec2 xz = xzAt(tau);
+				yr[k] = groundMax(gnd, xz.x, xz.y, glm::max(groundRadius, 25.0f), cg) + gp.height * hAt(tau);
+			}
+			int hw = glm::max(2, (int)std::round(K * glm::clamp(3.0f / gp.duration, 0.03f, 0.2f)));
+			for (int k = 0; k <= K; k++)
+			{
+				float m = -1e30f;
+				for (int j = glm::max(0, k - 2 * hw); j <= glm::min(K, k + 2 * hw); j++) m = glm::max(m, yr[j]);
+				env[k] = m;
+			}
+			for (int pass = 0; pass < 2; pass++)
+			{
+				for (int k = 0; k <= K; k++)
+				{
+					float sum = 0; int n = 0;
+					for (int j = glm::max(0, k - hw); j <= glm::min(K, k + hw); j++) { sum += env[j]; n++; }
+					sm[k] = sum / n;
+				}
+				env = sm;
+			}
+			camY = [sm, K](float tau)
+			{
+				float f = glm::clamp(tau, 0.0f, 1.0f) * K;
+				int k0 = glm::min(K - 1, (int)f);
+				return glm::mix(sm[k0], sm[k0 + 1], f - k0);
+			};
+			for (int i = 0; i <= N; i++)
+				P[i].y = camY(i / (float)N);
+		}
 		if (loop) P[N] = P[0];
 
 		auto& posTrack = rsw->cinematicTracks[0];
@@ -499,16 +751,55 @@ namespace
 		{
 			const int M = glm::max(2, (int)std::ceil(gp.duration / 0.5f));
 			const float la = glm::clamp(3.0f / gp.duration, 0.02f, 0.2f);
+			const float lookDist = glm::max(60.0f, gp.height * 1.6f);
 			for (int j = 0; j <= M; j++)
 			{
 				float u = j / (float)M;
+				glm::vec2 here = xzAt(u);
+				glm::vec2 hd = xzAt(glm::min(1.0f, u + 0.03f)) - xzAt(glm::max(0.0f, u - 0.03f));
+				hd = glm::length(hd) > 0.001f ? glm::normalize(hd) : dirV;
 				glm::vec2 q = xzAt(glm::min(1.0f, u + la));
 				glm::vec3 tp(q.x, groundAt(gnd, q.x, q.y, cg) + gp.height * 0.2f, q.y);
-				if (u + la > 1.0f)		// near the end keep looking along the heading
+				// gentle, slowly varying downward pitch (a few degrees of drift) instead of chasing the terrain
+				const float pitch = glm::radians(20.0f + 4.0f * std::sin(0.15f * gp.duration * u));
+				if (camY)
+					tp.y = camY(u) - glm::max(40.0f, glm::distance(q, here)) * std::tan(pitch);
+				if (topDown)
 				{
-					glm::vec2 a = xzAt(glm::max(0.0f, u - 0.02f)), b = xzAt(1.0f);
-					glm::vec2 dir = b - a;
-					if (glm::length(dir) > 0.001f) { dir = glm::normalize(dir) * 60.0f; tp = glm::vec3(b.x + dir.x, tp.y, b.y + dir.y); }
+					glm::vec2 q2 = xzAt(glm::min(1.0f, u + 0.01f));
+					tp = glm::vec3(q2.x, groundAt(gnd, q2.x, q2.y, cg), q2.y);
+				}
+				else if (gp.look == 0)
+				{
+					if (u + la > 1.0f)		// near the end keep looking along the heading
+						tp = glm::vec3(here.x + hd.x * 60.0f, tp.y, here.y + hd.y * 60.0f);
+					if (aimAtPoi && !pois.empty())		// drift the view towards the spot we are passing
+					{
+						size_t bi = 0;
+						for (size_t k = 1; k < pois.size(); k++) if (std::abs(pois[k].s - u) < std::abs(pois[bi].s - u)) bi = k;
+						float k = glm::clamp(slowAt(u) * 0.6f, 0.0f, 0.6f);
+						glm::vec3 focus(pois[bi].pos.x, groundAt(gnd, pois[bi].pos.x, pois[bi].pos.y, cg) + gp.height * 0.1f, pois[bi].pos.y);
+						tp = glm::mix(tp, focus, k);
+					}
+				}
+				else
+				{
+					float ang = 0.0f;
+					if (gp.look == 1) ang = 1.5707963f;
+					else if (gp.look == 2) ang = -1.5707963f;
+					else if (gp.look == 3) ang = 3.14159265f;
+					else if (gp.look == 5) ang = (u - 0.5f) * 2.0f * 1.15f * sgn;		// slow pan left to right
+					glm::vec2 dir2(hd.x * std::cos(ang) - hd.y * std::sin(ang), hd.x * std::sin(ang) + hd.y * std::cos(ang));
+					glm::vec2 tq = here + dir2 * lookDist;
+					tp = glm::vec3(tq.x, groundAt(gnd, tq.x, tq.y, cg) + gp.height * 0.2f, tq.y);
+					if (camY)
+						tp.y = camY(u) - lookDist * std::tan(pitch);
+					if (gp.look == 4 && !pois.empty())		// circle around the nearest spot
+					{
+						size_t bi = 0;
+						for (size_t k = 1; k < pois.size(); k++) if (glm::distance(pois[k].pos, here) < glm::distance(pois[bi].pos, here)) bi = k;
+						tp = glm::vec3(pois[bi].pos.x, groundAt(gnd, pois[bi].pos.x, pois[bi].pos.y, cg) + gp.height * 0.1f, pois[bi].pos.y);
+					}
 				}
 				tgtTrack.frames.push_back(new TgtFrame(gp.duration * u, Rsw::CameraTarget(tp, 1.0f)));
 			}
@@ -776,20 +1067,32 @@ void BrowEdit::showCinematicModeWindow()
 		static GenParams gp;
 		static int lastPreset = 0;
 		static std::string resultMsg;
-		if (ImGui::Combo("Preset", &gp.preset, "Field (wide flyover)\0City (tour of the busiest areas)\0Dungeon (walk the corridors)\0Orbit around the centre\0Diagonal sweep\0Reveal (pull in on a point)\0"))
+		if (ImGui::Combo("Preset", &gp.preset, "Field (tour of the best spots)\0City (tour of the busiest areas)\0Dungeon (walk the corridors)\0Orbit around the centre\0Diagonal sweep\0Reveal (pull in on a point)\0Spiral descent\0Crane (rise and pull back)\0Side tracking shot\0Top-down pan\0Low fly-by\0"))
 		{
-			static const float defH[] = { 90, 60, 22, 80, 50, 60 };
-			static const float defD[] = { 40, 45, 45, 30, 25, 20 };
+			static const float defH[] = { 90, 60, 22, 80, 50, 60, 70, 40, 45, 250, 25 };
+			static const float defD[] = { 40, 45, 45, 30, 25, 20, 30, 20, 30, 30, 18 };
+			static const int defLook[] = { 0, 0, 0, 0, 0, 0, 0, 0, 1, 0, 0 };
 			gp.height = defH[gp.preset];
 			gp.duration = defD[gp.preset];
+			gp.look = defLook[gp.preset];
 		}
 		ImGui::DragFloat("Duration (s)", &gp.duration, 0.5f, 4.0f, 600.0f);
 		ImGui::DragFloat("Camera height", &gp.height, 1.0f, 5.0f, 500.0f);
 		if (ImGui::IsItemHovered()) ImGui::SetTooltip("Height above the ground below the camera.\nRaise it if the camera clips through tall buildings.");
 		ImGui::SliderFloat("Edge margin (%)", &gp.margin, 0.0f, 40.0f, "%.0f");
 		if (ImGui::IsItemHovered()) ImGui::SetTooltip("Stays this far away from the map edges and corners, they are rarely worth showing");
-		if (gp.preset == 3 || gp.preset == 5)
+		if (gp.preset == 3 || gp.preset == 5 || gp.preset == 6 || gp.preset == 7)
 			ImGui::SliderFloat("Size (%)", &gp.radius, 20.0f, 100.0f, "%.0f");
+		if (gp.preset == 0 || gp.preset == 1 || gp.preset == 2)
+		{
+			ImGui::SliderFloat("Pacing (slow-mo)", &gp.pacing, 0.0f, 100.0f, "%.0f%%");
+			if (ImGui::IsItemHovered()) ImGui::SetTooltip("Slow motion near the interesting spots / tight turns, faster in between. 0 = constant speed");
+		}
+		if (gp.preset != 3 && gp.preset != 5 && gp.preset != 6 && gp.preset != 7)
+		{
+			ImGui::Combo("Start from", &gp.startSide, "Automatic\0West\0East\0North\0South\0");
+			ImGui::Combo("Camera looks", &gp.look, "Ahead\0Sideways (left)\0Sideways (right)\0Looking back\0Circle the spots\0Slow pan left to right\0");
+		}
 		ImGui::SliderFloat("Keys per second", &gp.keysPerSec, 0.2f, 2.0f, "%.2f");
 		ImGui::Checkbox("Clockwise / forward", &gp.clockwise);
 		ImGui::Checkbox("Use the editor view centre as focus", &gp.useViewCenter);
