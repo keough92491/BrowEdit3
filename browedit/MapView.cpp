@@ -530,10 +530,17 @@ void MapView::render(BrowEdit* browEdit)
 					{
 						if (tf[i]->time <= timeSelected && timeSelected < tf[i + 1]->time)
 						{
-							glm::vec3 p0 = tf[i == 0 ? 0 : i - 1]->data.point, p1 = tf[i]->data.point, p2 = tf[i + 1]->data.point, p3 = tf[i + 2 < tf.size() ? i + 2 : i + 1]->data.point;
+							// cubic Hermite with velocities that account for uneven keyframe spacing, so adding keys never makes it bumpy
+							auto vel = [&](size_t k) {
+								size_t a = k == 0 ? 0 : k - 1, b = k + 1 < tf.size() ? k + 1 : k;
+								float dtt = tf[b]->time - tf[a]->time;
+								return dtt > 0.00001f ? (tf[b]->data.point - tf[a]->data.point) / dtt : glm::vec3(0.0f);
+							};
+							glm::vec3 p1 = tf[i]->data.point, p2 = tf[i + 1]->data.point;
 							float dt = tf[i + 1]->time - tf[i]->time;
 							float u = dt > 0.00001f ? (timeSelected - tf[i]->time) / dt : 0.0f;
-							lp = 0.5f * ((2.0f * p1) + (-p0 + p2) * u + (2.0f * p0 - 5.0f * p1 + 4.0f * p2 - p3) * u * u + (-p0 + 3.0f * p1 - 3.0f * p2 + p3) * u * u * u);
+							float u2 = u * u, u3 = u2 * u;
+							lp = (2 * u3 - 3 * u2 + 1) * p1 + (u3 - 2 * u2 + u) * dt * vel(i) + (-2 * u3 + 3 * u2) * p2 + (u3 - u2) * dt * vel(i + 1);
 							break;
 						}
 					}
