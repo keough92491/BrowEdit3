@@ -7,6 +7,8 @@
 #include <browedit/Node.h>
 #include <browedit/gl/Texture.h>
 #include <browedit/actions/CubeHeightChangeAction.h>
+#include <browedit/actions/GatTileChangeAction.h>
+#include <browedit/actions/GroupAction.h>
 
 extern std::string gatTypes[];
 extern ImVec4 enabledColor;// (144 / 255.0f, 193 / 255.0f, 249 / 255.0f, 0.5f);
@@ -112,6 +114,63 @@ void BrowEdit::showGatWindow()
 	{
 		ImGui::Checkbox("Paste gat types", &windowData.gatEdit.pasteType);
 		ImGui::Checkbox("Paste gat heights", &windowData.gatEdit.pasteHeight);
+
+		if (ImGui::TreeNodeEx("Apply GAT type to selection", ImGuiTreeNodeFlags_DefaultOpen | ImGuiTreeNodeFlags_Framed))
+		{
+			// sets the walkable / non-walkable / water ... type of every selected cell (rectangle, lasso, wand, select all ...)
+			auto applyType = [&](int type)
+			{
+				auto group = new GroupAction();
+				for (auto& t : activeMapView->map->gatSelection)
+				{
+					if (!gat->inMap(t)) continue;
+					auto cube = gat->cubes[t.x][t.y];
+					if (cube->gatType != type)
+						group->addAction(new GatTileChangeAction(t, cube, type));
+				}
+				if (group->isEmpty())
+					delete group;
+				else
+					activeMapView->map->doAction(group, this);
+			};
+			ImGui::Text("%d cells selected", (int)activeMapView->map->gatSelection.size());
+			ImGuiStyle& style2 = ImGui::GetStyle();
+			float visibleX2 = ImGui::GetWindowPos().x + ImGui::GetWindowContentRegionMax().x;
+			for (int i = 0; i < 16; i++)
+			{
+				ImVec2 v1(.25f * (i % 4), .25f * (i / 4));
+				ImVec2 v2(v1.x + .25f, v1.y + .25f);
+				ImGui::PushID(1000 + i);
+				bool clicked = ImGui::ImageButton((ImTextureID)(long long)gatTexture->id(), ImVec2(config.toolbarButtonSize, config.toolbarButtonSize), v1, v2, 0, windowData.gatEdit.applyType == i ? enabledColor : disabledColor);
+				if (ImGui::IsItemHovered())
+					ImGui::SetTooltip("%d: %s", i, gatTypes[i].c_str());
+				float nextX2 = ImGui::GetItemRectMax().x + style2.ItemSpacing.x + config.toolbarButtonSize;
+				ImGui::PopID();
+				if (clicked)
+				{
+					windowData.gatEdit.applyType = i;
+					if (windowData.gatEdit.applyImmediately)
+						applyType(i);
+				}
+				if (i < 15 && nextX2 < visibleX2)
+					ImGui::SameLine();
+			}
+			ImGui::Checkbox("Apply as soon as I pick a type", &windowData.gatEdit.applyImmediately);
+			if (ImGui::Button("Apply GAT type to selection", ImVec2(ImGui::GetContentRegionAvailWidth(), 0)))
+				applyType(windowData.gatEdit.applyType);
+			if (ImGui::Button("Walkable", ImVec2(ImGui::GetContentRegionAvailWidth() / 2 - 4, 0)))
+			{
+				windowData.gatEdit.applyType = 0;
+				applyType(0);
+			}
+			ImGui::SameLine();
+			if (ImGui::Button("Not walkable", ImVec2(ImGui::GetContentRegionAvailWidth(), 0)))
+			{
+				windowData.gatEdit.applyType = 1;
+				applyType(1);
+			}
+			ImGui::TreePop();
+		}
 
 		if (ImGui::TreeNodeEx("Selection Options", ImGuiTreeNodeFlags_DefaultOpen | ImGuiTreeNodeFlags_Framed))
 		{
