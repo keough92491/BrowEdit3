@@ -179,7 +179,8 @@ public:
 
 			int gatIndex = 0;
 			int applyType = 0;					// type used by "Apply GAT type to selection"
-			bool applyImmediately = true;		// choosing a type applies it to the selection right away
+			bool previewFirst = true;			// first click on a type only previews it on the selection, the second click applies it
+			int previewType = -1;				// type currently previewed (-1 = none)
 
 			//options for selections
 			bool splitTriangleFlip = false;

@@ -132,6 +132,16 @@ void BrowEdit::showGatWindow()
 					delete group;
 				else
 					activeMapView->map->doAction(group, this);
+				windowData.gatEdit.previewType = -1;
+			};
+			// first click previews the type on the selected cells, a second click on the same type applies it
+			auto chooseType = [&](int type)
+			{
+				windowData.gatEdit.applyType = type;
+				if (!windowData.gatEdit.previewFirst || windowData.gatEdit.previewType == type)
+					applyType(type);
+				else
+					windowData.gatEdit.previewType = type;
 			};
 			ImGui::Text("%d cells selected", (int)activeMapView->map->gatSelection.size());
 			ImGuiStyle& style2 = ImGui::GetStyle();
@@ -147,28 +157,25 @@ void BrowEdit::showGatWindow()
 				float nextX2 = ImGui::GetItemRectMax().x + style2.ItemSpacing.x + config.toolbarButtonSize;
 				ImGui::PopID();
 				if (clicked)
-				{
-					windowData.gatEdit.applyType = i;
-					if (windowData.gatEdit.applyImmediately)
-						applyType(i);
-				}
+					chooseType(i);
 				if (i < 15 && nextX2 < visibleX2)
 					ImGui::SameLine();
 			}
-			ImGui::Checkbox("Apply as soon as I pick a type", &windowData.gatEdit.applyImmediately);
+			if (ImGui::Checkbox("Preview first (click the type again to apply)", &windowData.gatEdit.previewFirst))
+				windowData.gatEdit.previewType = -1;
+			if (windowData.gatEdit.previewType >= 0)
+			{
+				ImGui::TextColored(ImVec4(1, 0.8f, 0.2f, 1), "Previewing: %s - click it again or press Apply", gatTypes[windowData.gatEdit.previewType].c_str());
+				if (ImGui::Button("Cancel preview"))
+					windowData.gatEdit.previewType = -1;
+			}
 			if (ImGui::Button("Apply GAT type to selection", ImVec2(ImGui::GetContentRegionAvailWidth(), 0)))
 				applyType(windowData.gatEdit.applyType);
 			if (ImGui::Button("Walkable", ImVec2(ImGui::GetContentRegionAvailWidth() / 2 - 4, 0)))
-			{
-				windowData.gatEdit.applyType = 0;
-				applyType(0);
-			}
+				chooseType(0);
 			ImGui::SameLine();
 			if (ImGui::Button("Not walkable", ImVec2(ImGui::GetContentRegionAvailWidth(), 0)))
-			{
-				windowData.gatEdit.applyType = 1;
-				applyType(1);
-			}
+				chooseType(1);
 			ImGui::TreePop();
 		}
 
