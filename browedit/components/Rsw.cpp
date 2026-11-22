@@ -1235,7 +1235,7 @@ void RswModelCollider::calculateWorldFaces(Rsm::Mesh* mesh, const glm::mat4& mat
 				triangle.uvs[ii] = mesh->texCoords[face.texCoordIds[ii]];
 			}
 			
-			if (face.texId < rsm->textures.size())
+			if (face.texId >= 0 && face.texId < mesh->textures.size())
 				triangle.texId = mesh->textures[face.texId];
 			else
 				triangle.texId = -1;

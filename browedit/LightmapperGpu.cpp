@@ -318,11 +318,28 @@ void LightmapperGpu::gatherModelTriangles()
 				collider->calculateWorldFaces(false);
 	
 				auto& triangles = collider->bvh.triangles;
-	
+				const auto& textures = rsmRenderer->textures;
+				int untextured = 0;
+
 				for (int i = 0; i < triangles.size(); i++) {
 					triangles[i].shadowStrength = m->shadowStrength;
-					triangles[i].texId = rsmRenderer->textures[triangles[i].texId]->getId();
+
+					// a face can point at a texture the model doesn't have, or at one that didn't load
+					const int slot = triangles[i].texId;
+					gl::Texture* texture = slot >= 0 && slot < (int)textures.size() ? textures[slot] : nullptr;
+					if (texture && !texture->tryLoaded)
+						texture->reload();
+
+					if (texture && texture->loaded)
+						triangles[i].texId = texture->id();
+					else {
+						triangles[i].texId = -2; // casts a solid shadow, like on the CPU (-1 would count as terrain)
+						untextured++;
+					}
 				}
+
+				if (untextured)
+					std::cerr << "Lightmapper: " << untextured << " faces of " << m->fileName << " have no usable texture (" << textures.size() << " loaded for the model), using solid shadows" << std::endl;
 	
 				totalTriangles += triangles.size();
 				bvhs.push_back(collider->bvh);
