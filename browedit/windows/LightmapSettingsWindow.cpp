@@ -34,7 +34,8 @@ void BrowEdit::showLightmapSettingsWindow()
 			ImGui::SliderFloat("Point/spot light size", &settings.lightRadius, 0.5f, 30.0f, "%.1f");
 			ImGui::TextWrapped("Works on the GPU and the CPU lightmapper, and in the live lightmap. It takes about as many times longer as the sample count. Shadows stay sharp right where they touch the object and fade the further they fall.");
 		}
-		ImGui::Checkbox("Skip 'backside.bmp' texture", &config.ignoreBacksideTexture);
+		ImGui::Checkbox("Add wall occlusion", &settings.addWallOcclusion);
+		ImGui::Checkbox("Skip black.bmp and backside.bmp textures", &config.ignoreBacksideTexture);
 		ImGui::DragInt2("Generate Range X", glm::value_ptr(settings.rangeX), 1, 0, gnd->width);
 		ImGui::DragInt2("Generate Range Y", glm::value_ptr(settings.rangeY), 1, 0, gnd->height);
 		ImGui::DragInt("Thread Count", &config.lightmapperThreadCount, 1, 1, 32);
