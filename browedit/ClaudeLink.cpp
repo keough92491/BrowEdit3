@@ -65,8 +65,35 @@ namespace
 
 	std::string lower(std::string s)
 	{
-		std::transform(s.begin(), s.end(), s.begin(), ::tolower);
+		// ASCII only: the other bytes are parts of cp949 or UTF-8 characters
+		for (auto& c : s)
+			if (c >= 'A' && c <= 'Z')
+				c += 'a' - 'A';
 		return s;
+	}
+
+	// JSON strings are UTF-8. Maps and files use raw cp949 bytes, which the editor shows one character per byte (latin-1).
+	// A name may be given either in that form (what "info" returns) or in real Korean; both give the same raw bytes.
+	std::string toRaw(const std::string& text)
+	{
+		if (text.empty())
+			return text;
+		int n = MultiByteToWideChar(CP_UTF8, MB_ERR_INVALID_CHARS, text.c_str(), (int)text.size(), nullptr, 0);
+		if (n <= 0)
+			throw std::runtime_error("name is not valid UTF-8: " + text);
+		std::wstring wide(n, 0);
+		MultiByteToWideChar(CP_UTF8, MB_ERR_INVALID_CHARS, text.c_str(), (int)text.size(), &wide[0], n);
+
+		if (std::all_of(wide.begin(), wide.end(), [](wchar_t c) { return c <= 0xFF; }))
+			return util::utf8_to_iso_8859_1(text);
+
+		BOOL unmappable = FALSE;
+		int len = WideCharToMultiByte(949, WC_NO_BEST_FIT_CHARS, wide.c_str(), n, nullptr, 0, nullptr, &unmappable);
+		if (len <= 0 || unmappable)
+			throw std::runtime_error("name cannot be written in cp949: " + text);
+		std::string raw(len, 0);
+		WideCharToMultiByte(949, WC_NO_BEST_FIT_CHARS, wide.c_str(), n, &raw[0], len, nullptr, nullptr);
+		return raw;
 	}
 
 	int findTexture(Gnd* gnd, const std::string& file)
@@ -76,15 +103,13 @@ namespace
 			int n = atoi(file.c_str() + 1);
 			return (n >= 0 && n < (int)gnd->textures.size()) ? n : -1;
 		}
-		std::string f = lower(file);
+		std::string f = lower(toRaw(file));
 		std::replace(f.begin(), f.end(), '/', '\\');
 		for (size_t i = 0; i < gnd->textures.size(); i++)
 		{
 			std::string t = lower(gnd->textures[i]->file);
 			std::replace(t.begin(), t.end(), '/', '\\');
 			if (t == f)
-				return (int)i;
-			if (lower(util::iso_8859_1_to_utf8(gnd->textures[i]->file)) == f)
 				return (int)i;
 		}
 		return -1;
@@ -96,7 +121,7 @@ namespace
 		if (idx >= 0)
 			return idx;
 		// names in the JSON are UTF-8; the map stores raw (cp949 as latin-1) bytes, so "ÇÊµå¹Ù´Ú\\x" style names must be converted back
-		std::string raw = util::utf8_to_iso_8859_1(file);
+		std::string raw = toRaw(file);
 		map->doAction(new GndTextureAddAction(raw), browEdit);
 		idx = findTexture(gnd, file);
 		if (idx < 0)
@@ -334,10 +359,10 @@ namespace
 				for (size_t i = job.cursor; i < end; i++)
 				{
 					const auto& it = items[i];
-					std::string file = it["file"].get<std::string>();
+					std::string file = toRaw(it["file"].get<std::string>());
 					std::replace(file.begin(), file.end(), '/', '\\');
 					std::string path = "data\\model\\" + file;
-					std::string nodeName = it.value("name", file.substr(0, file.rfind(".")));
+					std::string nodeName = it.contains("name") ? toRaw(it["name"].get<std::string>()) : file.substr(0, file.rfind("."));
 					Node* node = new Node(util::iso_8859_1_to_utf8(nodeName));
 					auto rsm = util::ResourceManager<Rsm>::load(path);
 					node->addComponent(rsm);
@@ -393,7 +418,7 @@ namespace
 		}
 		else if (name == "delete_models")
 		{
-			std::string filter = lower(cmd.value("filter", ""));
+			std::string filter = lower(util::iso_8859_1_to_utf8(toRaw(cmd.value("filter", ""))));
 			std::vector<Node*> nodes;
 			map->rootNode->traverse([&](Node* n) {
 				auto m = n->getComponent<RswModel>();
