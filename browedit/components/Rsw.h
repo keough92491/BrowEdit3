@@ -162,10 +162,34 @@ public:
 		int softSamples = 24;
 		float softAngle = 3.0f;		// sun size in degrees
 		float lightRadius = 4.0f;	// point and spot lights, world units
-		glm::ivec2 rangeX;
-		glm::ivec2 rangeY;
+		glm::ivec2 rangeX = glm::ivec2(0);
+		glm::ivec2 rangeY = glm::ivec2(0);
 
-		NLOHMANN_DEFINE_TYPE_INTRUSIVE(LightmapSettings, quality, shadows, heightSelectionOnly, additiveShadow, ignoreBacksideTexture, runOnGpu, addWallOcclusion, rangeX, rangeY);
+		// Read key by key: maps saved by older versions don't have every key, and one missing key must not reset all the others.
+		friend void to_json(nlohmann::json& j, const LightmapSettings& s)
+		{
+			j["quality"] = s.quality;
+			j["shadows"] = s.shadows;
+			j["heightSelectionOnly"] = s.heightSelectionOnly;
+			j["additiveShadow"] = s.additiveShadow;
+			j["ignoreBacksideTexture"] = s.ignoreBacksideTexture;
+			j["runOnGpu"] = s.runOnGpu;
+			j["addWallOcclusion"] = s.addWallOcclusion;
+			j["rangeX"] = s.rangeX;
+			j["rangeY"] = s.rangeY;
+		}
+		friend void from_json(const nlohmann::json& j, LightmapSettings& s)
+		{
+			if (j.contains("quality")) j.at("quality").get_to(s.quality);
+			if (j.contains("shadows")) j.at("shadows").get_to(s.shadows);
+			if (j.contains("heightSelectionOnly")) j.at("heightSelectionOnly").get_to(s.heightSelectionOnly);
+			if (j.contains("additiveShadow")) j.at("additiveShadow").get_to(s.additiveShadow);
+			if (j.contains("ignoreBacksideTexture")) j.at("ignoreBacksideTexture").get_to(s.ignoreBacksideTexture);
+			if (j.contains("runOnGpu")) j.at("runOnGpu").get_to(s.runOnGpu);
+			if (j.contains("addWallOcclusion")) j.at("addWallOcclusion").get_to(s.addWallOcclusion);
+			if (j.contains("rangeX")) j.at("rangeX").get_to(s.rangeX);
+			if (j.contains("rangeY")) j.at("rangeY").get_to(s.rangeY);
+		}
 	} lightmapSettings;
 
 	class CropSettings

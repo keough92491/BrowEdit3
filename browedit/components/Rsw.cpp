@@ -76,6 +76,8 @@ void Rsw::load(const std::string& fileName, Map* map, BrowEdit* browEdit, bool l
 			colorPresets = extraProperties["colorPresets"];
 		if (extraProperties.find("lightmap") != extraProperties.end())
 			lightmapSettings = extraProperties["lightmap"];
+		// the selection is never saved, so "selection only" from an earlier session would light nothing or the wrong tiles
+		lightmapSettings.heightSelectionOnly = false;
 	}
 	catch (const std::exception& e)
 	{
